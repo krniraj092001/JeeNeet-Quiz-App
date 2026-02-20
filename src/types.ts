@@ -1,7 +1,7 @@
 import { Type } from "@google/genai";
 
 export type Language = 'English' | 'Hindi';
-export type ExamType = 'NEET' | 'JEE' | 'Combined';
+export type ExamType = 'NEET' | 'JEE' | 'Combined' | 'JEE_BOOKS' | 'NEET_BOOKS' | 'MS_CHOUHAN' | 'BLACK_BOOK' | 'NARENDRA_AVASTHI' | 'DPP';
 
 export interface Question {
   id: string;

@@ -24,7 +24,8 @@ import {
   FileText,
   X,
   Sun,
-  Moon
+  Moon,
+  PlayCircle
 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -81,6 +82,11 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
   { id: 'NEET', label: 'NEET Exam', desc: 'Based on previous year patterns' },
   { id: 'JEE', label: 'JEE Exam', desc: '2019-2025 PYQ Pattern' },
   { id: 'Combined', label: 'Combined Quiz', desc: 'Mix of JEE & NEET level' },
+  { id: 'JEE_BOOKS', label: 'JEE Exam question from books', desc: 'Standard textbook problems' },
+  { id: 'NEET_BOOKS', label: 'Neet Exam question from books', desc: 'NCERT & Reference book level' },
+  { id: 'MS_CHOUHAN', label: 'M.S. Chouhan Organic', desc: 'Advanced Organic Chemistry Problems' },
+  { id: 'BLACK_BOOK', label: 'Black Book Math', desc: 'Advanced Problems in Mathematics for JEE' },
+  { id: 'NARENDRA_AVASTHI', label: 'N. Avasthi Physical', desc: 'Problems in Physical Chemistry for JEE' },
 ];
 
 export default function App() {
@@ -95,7 +101,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [startTime, setStartTime] = useState(0);
   const [timeElapsed, setTimeElapsed] = useState(0);
-  const [uploadedFile, setUploadedFile] = useState<{ name: string, data: string, mimeType: string } | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<{ name: string, data: string, mimeType: string }[]>([]);
+  const [questionCount, setQuestionCount] = useState(15);
   const [isDragging, setIsDragging] = useState(false);
 
   // Timer logic
@@ -110,31 +117,42 @@ export default function App() {
   }, [view, startTime]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent) => {
-    const file = 'target' in e ? (e.target as HTMLInputElement).files?.[0] : (e as React.DragEvent).dataTransfer.files[0];
-    if (!file) return;
+    const files = 'target' in e ? (e.target as HTMLInputElement).files : (e as React.DragEvent).dataTransfer.files;
+    if (!files || files.length === 0) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64 = (event.target?.result as string).split(',')[1];
-      setUploadedFile({
-        name: file.name,
-        data: base64,
-        mimeType: file.type
-      });
-    };
-    reader.readAsDataURL(file);
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64 = (event.target?.result as string).split(',')[1];
+        setUploadedFiles(prev => [...prev, {
+          name: file.name,
+          data: base64,
+          mimeType: file.type
+        }]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removeFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const startQuiz = async (subject: string) => {
     setLoading(true);
     setSelectedSubject(subject);
     try {
+      let displaySubject = subject;
+      if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
+      if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';
+      if (examType === 'NARENDRA_AVASTHI') displaySubject = 'Physical Chemistry';
+      
       const qs = await generateQuestions(
-        subject, 
+        displaySubject, 
         language,
         examType,
-        25, 
-        uploadedFile ? { data: uploadedFile.data, mimeType: uploadedFile.mimeType } : undefined
+        questionCount, 
+        uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined
       );
       setQuestions(qs);
       setUserAnswers(new Array(qs.length).fill(null));
@@ -142,9 +160,19 @@ export default function App() {
       setStartTime(Date.now());
       setTimeElapsed(0);
       setView('quiz');
-    } catch (error) {
-      console.error(error);
-      alert("Failed to load questions. Please ensure the file is readable and try again.");
+    } catch (error: any) {
+      console.error("Quiz generation error:", error);
+      let errorMessage = "Failed to load questions. ";
+      
+      if (error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error")) {
+        errorMessage += "The AI service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
+      } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
+        errorMessage += "The AI service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
+      } else {
+        errorMessage += "Please ensure your internet connection is stable and try again.";
+      }
+      
+      alert(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -222,7 +250,7 @@ export default function App() {
           <BrainCircuit className="w-12 h-12 text-indigo-600" />
         </motion.div>
         <h2 className="text-xl font-semibold">Generating your personalized quiz...</h2>
-        <p className="text-slate-500 mt-2">Gemini is crafting {questions.length || 25} high-quality questions for you.</p>
+        <p className="text-slate-500 mt-2">Gemini is crafting 15 high-quality questions for you.</p>
       </div>
     );
   }
@@ -345,6 +373,21 @@ export default function App() {
                           {type.label}
                         </span>
                         <span className="text-xs text-slate-500">{type.desc}</span>
+                        {type.id === 'MS_CHOUHAN' && (
+                          <div className="mt-1 text-[10px] font-bold text-indigo-500 uppercase tracking-tighter">
+                            Specifically for Organic Chemistry
+                          </div>
+                        )}
+                        {type.id === 'BLACK_BOOK' && (
+                          <div className="mt-1 text-[10px] font-bold text-indigo-500 uppercase tracking-tighter">
+                            Specifically for Mathematics
+                          </div>
+                        )}
+                        {type.id === 'NARENDRA_AVASTHI' && (
+                          <div className="mt-1 text-[10px] font-bold text-indigo-500 uppercase tracking-tighter">
+                            Specifically for Physical Chemistry
+                          </div>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -352,48 +395,112 @@ export default function App() {
               </div>
 
               {/* File Upload Section */}
-              <div 
-                className={cn(
-                  "p-8 rounded-3xl border-2 border-dashed transition-all",
-                  theme === 'light' ? "bg-white" : "bg-slate-900",
-                  isDragging ? "border-indigo-600 bg-indigo-50" : (theme === 'light' ? "border-slate-200 hover:border-slate-300" : "border-slate-700 hover:border-slate-600"),
-                  uploadedFile && "border-emerald-500 bg-emerald-50/30"
-                )}
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFileUpload(e); }}
-              >
-                {!uploadedFile ? (
-                  <div className="flex flex-col items-center justify-center text-center space-y-4">
-                    <div className={cn("p-4 rounded-full", theme === 'light' ? "bg-indigo-50" : "bg-indigo-900/30")}>
-                      <Upload className="w-8 h-8 text-indigo-600" />
+              <div className="space-y-6">
+                <div className="flex flex-col md:flex-row gap-4 items-stretch">
+                  <div 
+                    className={cn(
+                      "flex-1 p-6 rounded-3xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center",
+                      theme === 'light' ? "bg-white" : "bg-slate-900",
+                      isDragging ? "border-indigo-600 bg-indigo-50" : (theme === 'light' ? "border-slate-200 hover:border-slate-300" : "border-slate-700 hover:border-slate-600"),
+                      uploadedFiles.length > 0 && "border-emerald-500 bg-emerald-50/30"
+                    )}
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFileUpload(e); }}
+                  >
+                    <div className={cn("p-3 rounded-full mb-3", theme === 'light' ? "bg-indigo-50" : "bg-indigo-900/30")}>
+                      <Upload className="w-6 h-6 text-indigo-600" />
                     </div>
                     <div>
-                      <h3 className={cn("text-lg font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Upload your Study Material</h3>
-                      <p className={cn("text-sm", theme === 'light' ? "text-slate-500" : "text-slate-400")}>Upload a PDF or Image of your book/notes to generate questions from it.</p>
+                      <h3 className={cn("text-base font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Upload Study Materials</h3>
+                      <p className={cn("text-xs mb-4", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+                        {uploadedFiles.length > 0 
+                          ? `${uploadedFiles.length} file(s) selected. Drop more to add.` 
+                          : "Drop multiple PDFs or Images here"}
+                      </p>
                     </div>
-                    <label className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold cursor-pointer hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
-                      Select File
-                      <input type="file" className="hidden" accept=".pdf,image/*" onChange={handleFileUpload} />
-                    </label>
+                    <div className="flex gap-2">
+                      <label className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-bold cursor-pointer hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100">
+                        Select Files
+                        <input type="file" multiple className="hidden" accept=".pdf,image/*" onChange={handleFileUpload} />
+                      </label>
+                      {uploadedFiles.length > 0 && (
+                        <button 
+                          onClick={() => setUploadedFiles([])}
+                          className="px-4 py-1.5 bg-rose-50 text-rose-600 rounded-lg text-sm font-bold hover:bg-rose-100 transition-all"
+                        >
+                          Clear All
+                        </button>
+                      )}
+                    </div>
                   </div>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="p-3 bg-emerald-100 rounded-xl">
-                        <FileText className="w-6 h-6 text-emerald-600" />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-slate-900">{uploadedFile.name}</h3>
-                        <p className="text-xs text-emerald-600 font-medium">File ready for question extraction</p>
+
+                  <div className={cn(
+                    "w-full md:w-72 p-6 rounded-3xl border-2 flex flex-col justify-between",
+                    theme === 'light' ? "bg-white border-slate-100" : "bg-slate-900 border-slate-800"
+                  )}>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-end">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Number of Questions</label>
+                          <span className="text-sm font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">{questionCount}</span>
+                        </div>
+                        <input 
+                          type="range" 
+                          min="15" 
+                          max="90" 
+                          step="5"
+                          value={questionCount} 
+                          onChange={(e) => setQuestionCount(parseInt(e.target.value))}
+                          className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        />
+                        <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
+                          <span>15</span>
+                          <span>90</span>
+                        </div>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => setUploadedFile(null)}
-                      className="p-2 hover:bg-rose-100 hover:text-rose-600 rounded-lg transition-colors text-slate-400"
+                    
+                    <button
+                      onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'))}
+                      disabled={uploadedFiles.length === 0}
+                      className={cn(
+                        "w-full py-4 mt-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
+                        uploadedFiles.length > 0 
+                          ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
+                          : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
+                      )}
                     >
-                      <X className="w-5 h-5" />
+                      <div className="flex items-center gap-2">
+                        <PlayCircle className="w-5 h-5" />
+                        <span>Create Exam Quiz</span>
+                      </div>
+                      <span className="text-[10px] opacity-80 font-medium">From {uploadedFiles.length} uploaded file(s)</span>
                     </button>
+                  </div>
+                </div>
+
+                {uploadedFiles.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {uploadedFiles.map((file, idx) => (
+                      <div key={idx} className={cn(
+                        "flex items-center justify-between p-3 border rounded-xl shadow-sm",
+                        theme === 'light' ? "bg-white border-slate-100" : "bg-slate-800 border-slate-700"
+                      )}>
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className="p-2 bg-emerald-50 rounded-lg shrink-0">
+                            <FileText className="w-4 h-4 text-emerald-600" />
+                          </div>
+                          <span className={cn("text-xs font-medium truncate", theme === 'light' ? "text-slate-700" : "text-slate-200")}>{file.name}</span>
+                        </div>
+                        <button 
+                          onClick={() => removeFile(idx)}
+                          className="p-1.5 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors text-slate-300"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
