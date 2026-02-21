@@ -25,7 +25,9 @@ import {
   X,
   Sun,
   Moon,
-  PlayCircle
+  PlayCircle,
+  Sparkles,
+  Layout
 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -71,6 +73,15 @@ const SUBJECTS = [
     darkBg: 'bg-fuchsia-950/20',
     darkBorder: 'border-fuchsia-900/50'
   },
+  { 
+    id: 'JEE Main Mock', 
+    icon: Layout, 
+    color: 'text-indigo-600', 
+    bg: 'bg-indigo-50', 
+    border: 'border-indigo-100',
+    darkBg: 'bg-indigo-950/20',
+    darkBorder: 'border-indigo-900/50'
+  },
 ];
 
 const LANGUAGES: { id: Language; label: string }[] = [
@@ -81,12 +92,13 @@ const LANGUAGES: { id: Language; label: string }[] = [
 const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
   { id: 'NEET', label: 'NEET Exam', desc: 'Based on previous year patterns' },
   { id: 'JEE', label: 'JEE Exam', desc: '2019-2025 PYQ Pattern' },
-  { id: 'Combined', label: 'Combined Quiz', desc: 'Mix of JEE & NEET level' },
+  { id: 'Combined', label: '12th Board Exam', desc: 'Based on NCERT and previous year' },
   { id: 'JEE_BOOKS', label: 'JEE Exam question from books', desc: 'Standard textbook problems' },
   { id: 'NEET_BOOKS', label: 'Neet Exam question from books', desc: 'NCERT & Reference book level' },
   { id: 'MS_CHOUHAN', label: 'M.S. Chouhan Organic', desc: 'Advanced Organic Chemistry Problems' },
   { id: 'BLACK_BOOK', label: 'Black Book Math', desc: 'Advanced Problems in Mathematics for JEE' },
   { id: 'NARENDRA_AVASTHI', label: 'N. Avasthi Physical', desc: 'Problems in Physical Chemistry for JEE' },
+  { id: 'JEE_MAIN_MOCK', label: 'JEE Main 2026 Mock', desc: '75 Qs (25 P, 25 C, 25 M) | 3 Hours | +4/-1' },
 ];
 
 export default function App() {
@@ -97,30 +109,44 @@ export default function App() {
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [userAnswers, setUserAnswers] = useState<(number | null)[]>([]);
+  const [userAnswers, setUserAnswers] = useState<(number | string | null)[]>([]);
   const [loading, setLoading] = useState(false);
   const [startTime, setStartTime] = useState(0);
   const [timeElapsed, setTimeElapsed] = useState(0);
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string, data: string, mimeType: string }[]>([]);
   const [questionCount, setQuestionCount] = useState(15);
   const [isDragging, setIsDragging] = useState(false);
+  const [questionTimes, setQuestionTimes] = useState<number[]>([]);
+  const [lastQuestionStartTime, setLastQuestionStartTime] = useState<number>(0);
+  const [timeLimit, setTimeLimit] = useState(0);
 
   // Timer logic
   useEffect(() => {
     let interval: number;
     if (view === 'quiz') {
       interval = window.setInterval(() => {
-        setTimeElapsed(Math.floor((Date.now() - startTime) / 1000));
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        setTimeElapsed(elapsed);
+        
+        // Auto-end quiz if time limit reached
+        if (timeLimit > 0 && elapsed >= timeLimit) {
+          setView('results');
+          clearInterval(interval);
+        }
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [view, startTime]);
+  }, [view, startTime, timeLimit]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent) => {
     const files = 'target' in e ? (e.target as HTMLInputElement).files : (e as React.DragEvent).dataTransfer.files;
     if (!files || files.length === 0) return;
 
     Array.from(files).forEach(file => {
+      if (file.size > 20 * 1024 * 1024) {
+        alert(`File "${file.name}" is too large. Please upload files smaller than 20MB.`);
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (event) => {
         const base64 = (event.target?.result as string).split(',')[1];
@@ -143,22 +169,41 @@ export default function App() {
     setSelectedSubject(subject);
     try {
       let displaySubject = subject;
-      if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
-      if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';
-      if (examType === 'NARENDRA_AVASTHI') displaySubject = 'Physical Chemistry';
+      let currentExamType = examType;
+      let currentCount = questionCount;
+
+      if (subject === 'JEE Main Mock') {
+        currentExamType = 'JEE_MAIN_MOCK';
+        currentCount = 75;
+        displaySubject = 'Physics, Chemistry, Mathematics';
+      } else {
+        if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
+        if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';
+        if (examType === 'NARENDRA_AVASTHI') displaySubject = 'Physical Chemistry';
+      }
       
       const qs = await generateQuestions(
         displaySubject, 
         language,
-        examType,
-        questionCount, 
+        currentExamType,
+        currentCount, 
         uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined
       );
       setQuestions(qs);
       setUserAnswers(new Array(qs.length).fill(null));
+      setQuestionTimes(new Array(qs.length).fill(0));
       setCurrentIndex(0);
       setStartTime(Date.now());
+      setLastQuestionStartTime(Date.now());
       setTimeElapsed(0);
+      
+      let minutesPerQuestion = (examType === 'NEET' || examType === 'NEET_BOOKS') ? 1 : 2;
+      if (currentExamType === 'JEE_MAIN_MOCK') {
+        setTimeLimit(180 * 60); // 3 hours
+      } else {
+        setTimeLimit(currentCount * minutesPerQuestion * 60);
+      }
+      
       setView('quiz');
     } catch (error: any) {
       console.error("Quiz generation error:", error);
@@ -166,6 +211,8 @@ export default function App() {
       
       if (error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error")) {
         errorMessage += "The AI service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
+      } else if (error?.message?.includes("exceeds the supported page limit of 1000")) {
+        errorMessage = "The uploaded document is too large. Gemini API supports a maximum of 1000 pages per document. Please upload a smaller file or split your PDF.";
       } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
         errorMessage += "The AI service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
       } else {
@@ -178,13 +225,20 @@ export default function App() {
     }
   };
 
-  const handleAnswer = (optionIndex: number) => {
+  const handleAnswer = (answer: number | string) => {
     const newAnswers = [...userAnswers];
-    newAnswers[currentIndex] = optionIndex;
+    newAnswers[currentIndex] = answer;
     setUserAnswers(newAnswers);
   };
 
   const nextQuestion = () => {
+    const now = Date.now();
+    const timeSpent = Math.floor((now - lastQuestionStartTime) / 1000);
+    const newTimes = [...questionTimes];
+    newTimes[currentIndex] += timeSpent;
+    setQuestionTimes(newTimes);
+    setLastQuestionStartTime(now);
+
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(currentIndex + 1);
     } else {
@@ -193,6 +247,13 @@ export default function App() {
   };
 
   const prevQuestion = () => {
+    const now = Date.now();
+    const timeSpent = Math.floor((now - lastQuestionStartTime) / 1000);
+    const newTimes = [...questionTimes];
+    newTimes[currentIndex] += timeSpent;
+    setQuestionTimes(newTimes);
+    setLastQuestionStartTime(now);
+
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1);
     }
@@ -210,12 +271,16 @@ export default function App() {
     let unattempted = 0;
 
     userAnswers.forEach((answer, index) => {
-      if (answer === null) {
+      const q = questions[index];
+      if (answer === null || answer === '') {
         unattempted++;
-      } else if (answer === questions[index].correctAnswer) {
-        correct++;
       } else {
-        incorrect++;
+        const isCorrect = String(answer).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
+        if (isCorrect) {
+          correct++;
+        } else {
+          incorrect++;
+        }
       }
     });
 
@@ -250,7 +315,7 @@ export default function App() {
           <BrainCircuit className="w-12 h-12 text-indigo-600" />
         </motion.div>
         <h2 className="text-xl font-semibold">Generating your personalized quiz...</h2>
-        <p className="text-slate-500 mt-2">Gemini is crafting 15 high-quality questions for you.</p>
+        <p className="text-slate-500 mt-2">The quiz creation process usually takes 1 to 3 minutes.</p>
       </div>
     );
   }
@@ -283,11 +348,13 @@ export default function App() {
             </button>
             {view === 'quiz' && (
               <div className={cn(
-                "flex items-center gap-1.5 font-mono text-sm px-3 py-1 rounded-full",
-                theme === 'light' ? "bg-slate-100 text-slate-600" : "bg-slate-800 text-slate-300"
+                "flex items-center gap-1.5 font-mono text-sm px-3 py-1 rounded-full transition-all",
+                timeLimit - timeElapsed < 60 
+                  ? "bg-rose-100 text-rose-600 animate-pulse font-bold" 
+                  : (theme === 'light' ? "bg-slate-100 text-slate-600" : "bg-slate-800 text-slate-300")
               )}>
                 <Timer className="w-4 h-4" />
-                {formatTime(timeElapsed)}
+                {timeLimit > 0 ? formatTime(Math.max(0, timeLimit - timeElapsed)) : formatTime(timeElapsed)}
               </div>
             )}
           </div>
@@ -309,13 +376,13 @@ export default function App() {
                   "text-4xl md:text-5xl font-bold tracking-tight",
                   theme === 'light' ? "text-slate-900" : "text-white"
                 )}>
-                  Master your exams with <span className="text-indigo-600">AI-Powered</span> practice.
+                  Master your exams with <span className="text-indigo-600">NITian Alumni</span>
                 </h1>
                 <p className={cn(
                   "text-lg max-w-2xl mx-auto",
                   theme === 'light' ? "text-slate-600" : "text-slate-400"
                 )}>
-                  Get instant JEE and NEET level questions generated by Gemini. Detailed explanations for every answer.
+                  Get instant JEE and NEET level questions generated. Detailed explanations for every answer.
                 </p>
               </div>
 
@@ -412,7 +479,7 @@ export default function App() {
                       <Upload className="w-6 h-6 text-indigo-600" />
                     </div>
                     <div>
-                      <h3 className={cn("text-base font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Upload Study Materials</h3>
+                      <h3 className={cn("text-base font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Upload Study Materials for quiz creations</h3>
                       <p className={cn("text-xs mb-4", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
                         {uploadedFiles.length > 0 
                           ? `${uploadedFiles.length} file(s) selected. Drop more to add.` 
@@ -463,10 +530,10 @@ export default function App() {
                     
                     <button
                       onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'))}
-                      disabled={uploadedFiles.length === 0}
+                      disabled={uploadedFiles.length === 0 && !selectedSubject}
                       className={cn(
                         "w-full py-4 mt-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
-                        uploadedFiles.length > 0 
+                        (uploadedFiles.length > 0 || selectedSubject)
                           ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
                           : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
                       )}
@@ -475,7 +542,11 @@ export default function App() {
                         <PlayCircle className="w-5 h-5" />
                         <span>Create Exam Quiz</span>
                       </div>
-                      <span className="text-[10px] opacity-80 font-medium">From {uploadedFiles.length} uploaded file(s)</span>
+                      <span className="text-[10px] opacity-80 font-medium">
+                        {uploadedFiles.length > 0 
+                          ? `From ${uploadedFiles.length} uploaded file(s)` 
+                          : selectedSubject ? `For ${selectedSubject}` : "Select a subject or upload files"}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -511,10 +582,12 @@ export default function App() {
                     key={subject.id}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => startQuiz(subject.id)}
+                    onClick={() => setSelectedSubject(subject.id)}
                     className={cn(
-                      "flex items-center p-6 rounded-2xl border-2 transition-all text-left group",
-                      theme === 'light' ? cn(subject.bg, subject.border) : cn(subject.darkBg, subject.darkBorder),
+                      "flex items-center p-6 rounded-2xl border-2 transition-all text-left group relative",
+                      selectedSubject === subject.id 
+                        ? (theme === 'light' ? "border-indigo-600 ring-2 ring-indigo-600/20" : "border-indigo-400 ring-2 ring-indigo-400/20")
+                        : (theme === 'light' ? cn(subject.bg, subject.border) : cn(subject.darkBg, subject.darkBorder)),
                       "hover:shadow-lg hover:shadow-indigo-500/5"
                     )}
                   >
@@ -523,9 +596,15 @@ export default function App() {
                     </div>
                     <div className="flex-1">
                       <h3 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{subject.id}</h3>
-                      <p className={cn("text-sm", theme === 'light' ? "text-slate-500" : "text-slate-400")}>Practice problems</p>
+                      <p className={cn("text-sm", theme === 'light' ? "text-slate-500" : "text-slate-400")}>Select to practice</p>
                     </div>
-                    <ChevronRight className="w-6 h-6 text-slate-400 group-hover:text-slate-600 transition-colors" />
+                    {selectedSubject === subject.id ? (
+                      <div className="bg-indigo-600 text-white p-1 rounded-full">
+                        <PlayCircle className="w-5 h-5" />
+                      </div>
+                    ) : (
+                      <ChevronRight className="w-6 h-6 text-slate-400 group-hover:text-slate-600 transition-colors" />
+                    )}
                   </motion.button>
                 ))}
               </div>
@@ -593,56 +672,62 @@ export default function App() {
                 theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
               )}>
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <span className={cn(
-                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider",
-                      questions[currentIndex].difficulty === 'Easy' ? 'bg-emerald-100 text-emerald-700' :
-                      questions[currentIndex].difficulty === 'Medium' ? 'bg-amber-100 text-amber-700' :
-                      'bg-rose-100 text-rose-700'
-                    )}>
-                      {questions[currentIndex].difficulty}
-                    </span>
-                    <span className={cn("text-xs font-medium", theme === 'light' ? "text-slate-400" : "text-slate-500")}>{questions[currentIndex].topic}</span>
-                    <span className="text-xs text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded">{questions[currentIndex].examType}</span>
-                  </div>
                   <div className={cn("text-2xl font-semibold leading-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <LatexMarkdown content={questions[currentIndex].text} />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
-                  {questions[currentIndex].options.map((option, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleAnswer(idx)}
-                      className={cn(
-                        "p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between group",
-                        userAnswers[currentIndex] === idx
-                          ? "border-indigo-600 bg-indigo-50"
-                          : "border-slate-100 hover:border-slate-200 hover:bg-slate-50"
-                      )}
-                    >
-                      <div className="flex items-center gap-4">
-                        <span className={cn(
-                          "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
+                  {questions[currentIndex].type === 'NUMERICAL' ? (
+                    <div className="space-y-4">
+                      <p className={cn("text-sm font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+                        Enter your numerical answer below:
+                      </p>
+                      <input 
+                        type="text"
+                        value={userAnswers[currentIndex] || ''}
+                        onChange={(e) => handleAnswer(e.target.value)}
+                        placeholder="Type your answer here..."
+                        className={cn(
+                          "w-full p-5 rounded-2xl border-2 text-xl font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all",
+                          theme === 'light' ? "bg-white border-slate-100" : "bg-slate-800 border-slate-700 text-white"
+                        )}
+                      />
+                    </div>
+                  ) : (
+                    questions[currentIndex].options?.map((option, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleAnswer(idx)}
+                        className={cn(
+                          "p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between group",
                           userAnswers[currentIndex] === idx
-                            ? "bg-indigo-600 text-white"
-                            : "bg-slate-100 text-slate-500 group-hover:bg-slate-200"
-                        )}>
-                          {String.fromCharCode(65 + idx)}
-                        </span>
-                        <div className={cn(
-                          "font-medium",
-                          userAnswers[currentIndex] === idx ? "text-indigo-900" : "text-slate-700"
-                        )}>
-                          <LatexMarkdown content={option} />
+                            ? "border-indigo-600 bg-indigo-50"
+                            : "border-slate-100 hover:border-slate-200 hover:bg-slate-50"
+                        )}
+                      >
+                        <div className="flex items-center gap-4">
+                          <span className={cn(
+                            "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
+                            userAnswers[currentIndex] === idx
+                              ? "bg-indigo-600 text-white"
+                              : "bg-slate-100 text-slate-500 group-hover:bg-slate-200"
+                          )}>
+                            {String.fromCharCode(65 + idx)}
+                          </span>
+                          <div className={cn(
+                            "font-medium",
+                            userAnswers[currentIndex] === idx ? "text-indigo-900" : "text-slate-700"
+                          )}>
+                            <LatexMarkdown content={option} />
+                          </div>
                         </div>
-                      </div>
-                      {userAnswers[currentIndex] === idx && (
-                        <CheckCircle2 className="w-5 h-5 text-indigo-600 shrink-0" />
-                      )}
-                    </button>
-                  ))}
+                        {userAnswers[currentIndex] === idx && (
+                          <CheckCircle2 className="w-5 h-5 text-indigo-600 shrink-0" />
+                        )}
+                      </button>
+                    ))
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between pt-4 border-t border-slate-100">
@@ -738,38 +823,80 @@ export default function App() {
                     )}>
                       <div className="flex items-start justify-between gap-4">
                         <div className="space-y-1">
-                          <div className="text-xs font-bold text-slate-400 uppercase">Question {idx + 1}</div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="text-xs font-bold text-slate-400 uppercase">Question {idx + 1}</div>
+                            <span className={cn(
+                              "px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-wider",
+                              q.difficulty === 'Easy' ? 'bg-emerald-100 text-emerald-700' :
+                              q.difficulty === 'Moderate' ? 'bg-amber-100 text-amber-700' :
+                              'bg-rose-100 text-rose-700'
+                            )}>
+                              {q.difficulty}
+                            </span>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                              {q.topic}
+                            </span>
+                            <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1">
+                              <Timer className="w-2.5 h-2.5" /> {questionTimes[idx]}s
+                            </span>
+                          </div>
                           <div className={cn("font-semibold", theme === 'light' ? "text-slate-900" : "text-slate-100")}>
                             <LatexMarkdown content={q.text} />
                           </div>
                         </div>
-                        {userAnswers[idx] === q.correctAnswer ? (
-                          <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-1 rounded text-xs font-bold shrink-0">
-                            <CheckCircle2 className="w-4 h-4" /> Correct
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-1 rounded text-xs font-bold shrink-0">
-                            <XCircle className="w-4 h-4" /> Incorrect
-                          </div>
-                        )}
+                        {(() => {
+                          const isCorrect = userAnswers[idx] !== null && String(userAnswers[idx]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
+                          return isCorrect ? (
+                            <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-1 rounded text-xs font-bold shrink-0">
+                              <CheckCircle2 className="w-4 h-4" /> Correct
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-1 rounded text-xs font-bold shrink-0">
+                              <XCircle className="w-4 h-4" /> {userAnswers[idx] === null ? 'Unattempted' : 'Incorrect'}
+                            </div>
+                          );
+                        })()}
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {q.options.map((opt, oIdx) => (
-                          <div 
-                            key={oIdx}
-                            className={cn(
-                              "p-3 rounded-xl text-sm border",
-                              oIdx === q.correctAnswer ? "bg-emerald-50 border-emerald-200 text-emerald-900 font-medium" :
-                              oIdx === userAnswers[idx] ? "bg-rose-50 border-rose-200 text-rose-900" :
-                              theme === 'light' ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-slate-800 border-slate-700 text-slate-400"
-                            )}
-                          >
-                            <span className="font-bold mr-2">{String.fromCharCode(65 + oIdx)}.</span>
-                            <LatexMarkdown content={opt} />
+                      {q.type === 'NUMERICAL' ? (
+                        <div className="space-y-2">
+                          <div className={cn(
+                            "p-4 rounded-xl border text-sm",
+                            theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700"
+                          )}>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500 font-medium">Your Answer:</span>
+                              <span className={cn(
+                                "font-bold",
+                                String(userAnswers[idx]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase() ? "text-emerald-600" : "text-rose-600"
+                              )}>
+                                {userAnswers[idx] === null ? 'None' : userAnswers[idx]}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200/50">
+                              <span className="text-slate-500 font-medium">Correct Answer:</span>
+                              <span className="font-bold text-emerald-600">{q.correctAnswer}</span>
+                            </div>
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {q.options?.map((opt, oIdx) => (
+                            <div 
+                              key={oIdx}
+                              className={cn(
+                                "p-3 rounded-xl text-sm border",
+                                String(oIdx) === String(q.correctAnswer) ? "bg-emerald-50 border-emerald-200 text-emerald-900 font-medium" :
+                                String(oIdx) === String(userAnswers[idx]) ? "bg-rose-50 border-rose-200 text-rose-900" :
+                                theme === 'light' ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-slate-800 border-slate-700 text-slate-400"
+                              )}
+                            >
+                              <span className="font-bold mr-2">{String.fromCharCode(65 + oIdx)}.</span>
+                              <LatexMarkdown content={opt} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
 
                       <div className={cn(
                         "p-4 rounded-xl border",

@@ -1,17 +1,18 @@
 import { Type } from "@google/genai";
 
 export type Language = 'English' | 'Hindi';
-export type ExamType = 'NEET' | 'JEE' | 'Combined' | 'JEE_BOOKS' | 'NEET_BOOKS' | 'MS_CHOUHAN' | 'BLACK_BOOK' | 'NARENDRA_AVASTHI' | 'DPP';
+export type ExamType = 'NEET' | 'JEE' | 'Combined' | 'JEE_BOOKS' | 'NEET_BOOKS' | 'MS_CHOUHAN' | 'BLACK_BOOK' | 'NARENDRA_AVASTHI' | 'DPP' | 'JEE_MAIN_MOCK';
 
 export interface Question {
   id: string;
   text: string;
-  options: string[];
-  correctAnswer: number;
+  type: 'MCQ' | 'NUMERICAL';
+  options?: string[];
+  correctAnswer: number | string;
   explanation: string;
   subject: string;
   topic: string;
-  difficulty: 'Easy' | 'Medium' | 'Hard';
+  difficulty: 'Easy' | 'Moderate' | 'Hard';
   language: Language;
   examType: ExamType;
 }
@@ -19,7 +20,7 @@ export interface Question {
 export interface QuizState {
   questions: Question[];
   currentQuestionIndex: number;
-  answers: number[];
+  answers: (number | string | null)[];
   isFinished: boolean;
   startTime: number;
   endTime?: number;
@@ -31,14 +32,15 @@ export const QUIZ_SCHEMA = {
     type: Type.OBJECT,
     properties: {
       text: { type: Type.STRING, description: "The question text. Use LaTeX for mathematical formulas wrapped in $...$ or $$...$$." },
+      type: { type: Type.STRING, description: "Question type: 'MCQ' or 'NUMERICAL'" },
       options: { 
         type: Type.ARRAY, 
         items: { type: Type.STRING },
-        description: "Four multiple choice options. Use LaTeX for formulas."
+        description: "Four multiple choice options for MCQ. Leave empty or omit for NUMERICAL. Use LaTeX for formulas."
       },
       correctAnswer: { 
-        type: Type.INTEGER, 
-        description: "Index of the correct option (0-3)" 
+        type: Type.STRING, 
+        description: "For MCQ: Index of the correct option (0-3) as string. For NUMERICAL: The correct numerical value as string." 
       },
       explanation: { 
         type: Type.STRING, 
@@ -47,9 +49,9 @@ export const QUIZ_SCHEMA = {
       topic: { type: Type.STRING, description: "Specific topic within the subject" },
       difficulty: { 
         type: Type.STRING, 
-        description: "Difficulty level: Easy, Medium, or Hard" 
+        description: "Difficulty level: Easy, Moderate, or Hard" 
       }
     },
-    required: ["text", "options", "correctAnswer", "explanation", "topic", "difficulty"]
+    required: ["text", "type", "correctAnswer", "explanation", "topic", "difficulty"]
   }
 };
