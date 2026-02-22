@@ -62,6 +62,7 @@ import rehypeKatex from 'rehype-katex';
 import { Question, Language, ExamType } from './types';
 import { generateQuestions } from './services/geminiService';
 import { cn } from './utils';
+import { Analytics } from '@vercel/analytics/react';
 
 const SUBJECTS = [
   { 
@@ -1442,6 +1443,7 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+      <Analytics />
     </div>
   );
 }
