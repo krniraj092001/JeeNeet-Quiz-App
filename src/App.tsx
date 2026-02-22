@@ -27,8 +27,35 @@ import {
   Moon,
   PlayCircle,
   Sparkles,
-  Layout
+  Layout,
+  BarChart3,
+  PieChart as PieChartIcon,
+  Clock,
+  Target,
+  TrendingUp,
+  Zap,
+  Share2,
+  Copy,
+  Link,
+  Download
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip as RechartsTooltip, 
+  ResponsiveContainer, 
+  Cell,
+  PieChart,
+  Pie,
+  LineChart,
+  Line,
+  Legend
+} from 'recharts';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -82,6 +109,15 @@ const SUBJECTS = [
     darkBg: 'bg-indigo-950/20',
     darkBorder: 'border-indigo-900/50'
   },
+  { 
+    id: 'NEET 2026 Mock', 
+    icon: Layout, 
+    color: 'text-rose-600', 
+    bg: 'bg-rose-50', 
+    border: 'border-rose-100',
+    darkBg: 'bg-rose-950/20',
+    darkBorder: 'border-rose-900/50'
+  },
 ];
 
 const LANGUAGES: { id: Language; label: string }[] = [
@@ -99,11 +135,12 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
   { id: 'BLACK_BOOK', label: 'Black Book Math', desc: 'Advanced Problems in Mathematics for JEE' },
   { id: 'NARENDRA_AVASTHI', label: 'N. Avasthi Physical', desc: 'Problems in Physical Chemistry for JEE' },
   { id: 'JEE_MAIN_MOCK', label: 'JEE Main 2026 Mock', desc: '75 Qs (25 P, 25 C, 25 M) | 3 Hours | +4/-1' },
+  { id: 'NEET_MOCK', label: 'NEET 2026 Mock', desc: '200 Qs | 3h 20m | 2025-Style Conceptual Difficulty' },
 ];
 
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [view, setView] = useState<'home' | 'quiz' | 'results'>('home');
+  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready'>('home');
   const [language, setLanguage] = useState<Language>('English');
   const [examType, setExamType] = useState<ExamType>('NEET');
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -119,6 +156,30 @@ export default function App() {
   const [questionTimes, setQuestionTimes] = useState<number[]>([]);
   const [lastQuestionStartTime, setLastQuestionStartTime] = useState<number>(0);
   const [timeLimit, setTimeLimit] = useState(0);
+  const reportRef = React.useRef<HTMLDivElement>(null);
+
+  // Handle shareable links
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const subjectParam = params.get('subject');
+    const examTypeParam = params.get('examType') as ExamType;
+    
+    if (subjectParam && examTypeParam) {
+      setExamType(examTypeParam);
+      setSelectedSubject(subjectParam);
+      // We don't auto-start to avoid accidental API calls on every load, 
+      // but we could if we wanted to. Let's just pre-select.
+    }
+  }, []);
+
+  // Auto-set question count for Mock Tests
+  useEffect(() => {
+    if (examType === 'JEE_MAIN_MOCK' || selectedSubject === 'JEE Main Mock') {
+      setQuestionCount(75);
+    } else if (examType === 'NEET_MOCK' || selectedSubject === 'NEET 2026 Mock') {
+      setQuestionCount(200);
+    }
+  }, [examType, selectedSubject]);
 
   // Timer logic
   useEffect(() => {
@@ -164,53 +225,98 @@ export default function App() {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const resetQuiz = () => {
+    setView('home');
+    setSelectedSubject(null);
+    setQuestions([]);
+    setCurrentIndex(0);
+    setUserAnswers([]);
+    setStartTime(0);
+    setTimeElapsed(0);
+    setQuestionTimes([]);
+    setLastQuestionStartTime(0);
+  };
+
+  const beginTest = () => {
+    setStartTime(Date.now());
+    setLastQuestionStartTime(Date.now());
+    setView('quiz');
+  };
+
   const startQuiz = async (subject: string) => {
     setLoading(true);
     setSelectedSubject(subject);
     try {
+      // Small initial delay to ensure quota is fresh
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       let displaySubject = subject;
       let currentExamType = examType;
       let currentCount = questionCount;
 
+      let qs: Question[] = [];
+      
       if (subject === 'JEE Main Mock') {
-        currentExamType = 'JEE_MAIN_MOCK';
-        currentCount = 75;
-        displaySubject = 'Physics, Chemistry, Mathematics';
+        // Sequential generation for JEE Mock to avoid rate limits
+        const subjects = ['Physics', 'Chemistry', 'Mathematics'];
+        for (const sub of subjects) {
+          const batch = await generateQuestions(sub, language, 'JEE_MAIN_MOCK', 25, undefined);
+          qs.push(...batch);
+          // Increased delay between subjects to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } else if (subject === 'NEET 2026 Mock' || examType === 'NEET_MOCK') {
+        // Sequential generation for NEET Mock to avoid rate limits
+        const subjectConfigs = [
+          { name: 'Physics', count: 50 },
+          { name: 'Chemistry', count: 50 },
+          { name: 'Biology (Botany)', count: 50 },
+          { name: 'Biology (Zoology)', count: 50 }
+        ];
+        for (const config of subjectConfigs) {
+          const batch = await generateQuestions(config.name, language, 'NEET_MOCK', config.count, undefined);
+          qs.push(...batch);
+          // Increased delay between subjects to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       } else {
         if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
         if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';
         if (examType === 'NARENDRA_AVASTHI') displaySubject = 'Physical Chemistry';
+        
+        qs = await generateQuestions(
+          displaySubject, 
+          language,
+          currentExamType,
+          currentCount, 
+          uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined
+        );
       }
       
-      const qs = await generateQuestions(
-        displaySubject, 
-        language,
-        currentExamType,
-        currentCount, 
-        uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined
-      );
       setQuestions(qs);
       setUserAnswers(new Array(qs.length).fill(null));
       setQuestionTimes(new Array(qs.length).fill(0));
       setCurrentIndex(0);
-      setStartTime(Date.now());
-      setLastQuestionStartTime(Date.now());
       setTimeElapsed(0);
       
       let minutesPerQuestion = (examType === 'NEET' || examType === 'NEET_BOOKS') ? 1 : 2;
       if (currentExamType === 'JEE_MAIN_MOCK') {
         setTimeLimit(180 * 60); // 3 hours
+      } else if (currentExamType === 'NEET_MOCK') {
+        setTimeLimit(200 * 60); // 3 hours 20 minutes
       } else {
         setTimeLimit(currentCount * minutesPerQuestion * 60);
       }
       
-      setView('quiz');
+      setView('ready');
     } catch (error: any) {
       console.error("Quiz generation error:", error);
       let errorMessage = "Failed to load questions. ";
       
       if (error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error")) {
         errorMessage += "The AI service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
+      } else if (error?.status === "RESOURCE_EXHAUSTED" || error?.message?.includes("429") || error?.message?.includes("quota")) {
+        errorMessage = "API Rate Limit Exceeded. You've made too many requests in a short time. Please wait about 60 seconds and try again.";
       } else if (error?.message?.includes("exceeds the supported page limit of 1000")) {
         errorMessage = "The uploaded document is too large. Gemini API supports a maximum of 1000 pages per document. Please upload a smaller file or split your PDF.";
       } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
@@ -265,6 +371,27 @@ export default function App() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const downloadReport = async () => {
+    if (!reportRef.current) return;
+    try {
+      const canvas = await html2canvas(reportRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: theme === 'light' ? '#ffffff' : '#0f172a'
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgProps = pdf.getImageProperties(imgData);
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Report_${selectedSubject}_${new Date().toLocaleDateString()}.pdf`);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to download report. Please try again.');
+    }
+  };
+
   const calculateResults = () => {
     let correct = 0;
     let incorrect = 0;
@@ -285,7 +412,7 @@ export default function App() {
     });
 
     const totalMarks = (correct * 4) - (incorrect * 1);
-    const maxMarks = questions.length * 4;
+    const maxMarks = examType === 'NEET_MOCK' ? 720 : questions.length * 4;
 
     return { correct, incorrect, unattempted, totalMarks, maxMarks };
   };
@@ -331,7 +458,7 @@ export default function App() {
         theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
       )}>
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('home')}>
+          <div className="flex items-center gap-2 cursor-pointer" onClick={resetQuiz}>
             <GraduationCap className={cn("w-8 h-8", theme === 'light' ? "text-indigo-600" : "text-indigo-400")} />
             <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>JeeNeet Quiz</span>
           </div>
@@ -519,8 +646,17 @@ export default function App() {
                           step="5"
                           value={questionCount} 
                           onChange={(e) => setQuestionCount(parseInt(e.target.value))}
-                          className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          disabled={examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' || selectedSubject === 'JEE Main Mock' || selectedSubject === 'NEET 2026 Mock'}
+                          className={cn(
+                            "w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600",
+                            (examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' || selectedSubject === 'JEE Main Mock' || selectedSubject === 'NEET 2026 Mock') && "opacity-50 cursor-not-allowed"
+                          )}
                         />
+                        {(examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' || selectedSubject === 'JEE Main Mock' || selectedSubject === 'NEET 2026 Mock') && (
+                          <p className="text-[9px] text-indigo-500 font-bold uppercase tracking-tight text-center mt-1">
+                            Fixed count for {(examType === 'JEE_MAIN_MOCK' || selectedSubject === 'JEE Main Mock') ? 'JEE Main' : 'NEET'} Mock
+                          </p>
+                        )}
                         <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
                           <span>15</span>
                           <span>90</span>
@@ -637,6 +773,85 @@ export default function App() {
             </motion.div>
           )}
 
+          {view === 'ready' && (
+            <motion.div
+              key="ready"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="max-w-2xl mx-auto"
+            >
+              <div className={cn(
+                "p-10 rounded-3xl border shadow-xl text-center space-y-8",
+                theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+              )}>
+                <div className="inline-flex p-5 bg-indigo-50 rounded-3xl mb-2">
+                  <Sparkles className="w-12 h-12 text-indigo-600" />
+                </div>
+                
+                <div className="space-y-3">
+                  <h2 className={cn("text-3xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Quiz is Ready!</h2>
+                  <p className="text-slate-500">
+                    We've generated <span className="font-bold text-indigo-600">{questions.length}</span> high-quality questions for <span className="font-bold text-slate-700">{selectedSubject}</span>.
+                  </p>
+                  <div className="text-indigo-500 font-bold text-lg">+4/-1</div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 py-4">
+                  <div className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800/50 border-slate-700")}>
+                    <Timer className="w-5 h-5 text-indigo-600 mb-2 mx-auto" />
+                    <div className={cn("text-lg font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>
+                      {timeLimit > 0 ? formatTime(timeLimit) : 'No Limit'}
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Time Limit</div>
+                  </div>
+                  <div className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800/50 border-slate-700")}>
+                    <Target className="w-5 h-5 text-emerald-600 mb-2 mx-auto" />
+                    <div className={cn("text-lg font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>
+                      +{questions.length * 4} / -{questions.length}
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Marking Scheme</div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    onClick={beginTest}
+                    className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 group"
+                  >
+                    <PlayCircle className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                    Start Test Now
+                  </button>
+                  
+                  <div className="relative group">
+                    <button
+                      onClick={() => {
+                        const url = new URL(window.location.href);
+                        url.searchParams.set('subject', selectedSubject || '');
+                        url.searchParams.set('examType', examType);
+                        navigator.clipboard.writeText(url.toString());
+                        alert('Quiz link copied to clipboard!');
+                      }}
+                      className={cn(
+                        "w-full py-3 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2 border-2",
+                        theme === 'light' ? "border-slate-100 text-slate-600 hover:bg-slate-50" : "border-slate-800 text-slate-400 hover:bg-slate-800"
+                      )}
+                    >
+                      <Copy className="w-4 h-4" />
+                      Copy Quiz Link
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  onClick={resetQuiz}
+                  className="text-slate-400 text-sm font-medium hover:text-slate-600 transition-colors"
+                >
+                  Cancel and go back
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {view === 'quiz' && questions.length > 0 && (
             <motion.div
               key="quiz"
@@ -647,8 +862,8 @@ export default function App() {
             >
               <div className="flex items-center justify-between mb-2">
                 <button 
-                  onClick={() => setView('home')}
-                  className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors"
+                  onClick={resetQuiz}
+                  className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-all font-medium"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   Exit Quiz
@@ -750,6 +965,296 @@ export default function App() {
             </motion.div>
           )}
 
+          {view === 'report' && (
+            <motion.div
+              key="report"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-8 pb-20"
+            >
+              <div className="flex items-center justify-between">
+                <button 
+                  onClick={() => setView('results')}
+                  className="flex items-center gap-2 text-slate-500 font-bold hover:text-indigo-600 transition-colors"
+                >
+                  <ArrowLeft className="w-5 h-5" /> Back to Results
+                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set('subject', selectedSubject || '');
+                      url.searchParams.set('examType', examType);
+                      navigator.clipboard.writeText(url.toString());
+                      alert('Link copied! Share this quiz with others.');
+                    }}
+                    className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                    title="Share Quiz"
+                  >
+                    <Share2 className="w-5 h-5" />
+                  </button>
+                  <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-full text-indigo-600 font-bold text-sm">
+                    <Sparkles className="w-4 h-4" /> FullyPass Smart Report
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-8">
+                {/* Professional Data Table */}
+                <div className={cn(
+                  "p-8 rounded-3xl border shadow-sm overflow-hidden",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <h3 className={cn("text-xl font-bold mb-6", theme === 'light' ? "text-slate-900" : "text-white")}>Subject Wise Distribution</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="bg-[#E8F3E8] text-[#2D4A2D]">
+                          <th rowSpan={2} className="border border-slate-300 p-3 text-left font-bold">Subject</th>
+                          <th colSpan={2} className="border border-slate-300 p-3 text-center font-bold">Class 11</th>
+                          <th colSpan={2} className="border border-slate-300 p-3 text-center font-bold">Class 12</th>
+                          <th colSpan={2} className="border border-slate-300 p-3 text-center font-bold">Total Percentage</th>
+                        </tr>
+                        <tr className="bg-[#E8F3E8] text-[#2D4A2D]">
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">No of Questions</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Total Marks</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">No of Questions</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Total Marks</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Class 11</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Class 12</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(new Set(questions.map(q => q.subject))).map((sub, idx) => {
+                          const subQs = questions.filter(q => q.subject === sub);
+                          const c11 = subQs.filter(q => q.grade === 'Class 11');
+                          const c12 = subQs.filter(q => q.grade === 'Class 12');
+                          const c11Total = questions.filter(q => q.grade === 'Class 11').length;
+                          const c12Total = questions.filter(q => q.grade === 'Class 12').length;
+                          
+                          return (
+                            <tr key={idx} className={theme === 'light' ? "hover:bg-slate-50" : "hover:bg-slate-800"}>
+                              <td className={cn("border border-slate-300 p-3 font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{sub}</td>
+                              <td className="border border-slate-300 p-3 text-center">{c11.length}</td>
+                              <td className="border border-slate-300 p-3 text-center">{c11.length * 4}</td>
+                              <td className="border border-slate-300 p-3 text-center">{c12.length}</td>
+                              <td className="border border-slate-300 p-3 text-center">{c12.length * 4}</td>
+                              <td className="border border-slate-300 p-3 text-center">{(c11Total > 0 ? (c11.length / c11Total) * 100 : 0).toFixed(2)}%</td>
+                              <td className="border border-slate-300 p-3 text-center">{(c12Total > 0 ? (c12.length / c12Total) * 100 : 0).toFixed(2)}%</td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="bg-[#E8F3E8] text-[#2D4A2D] font-bold">
+                          <td className="border border-slate-300 p-3">Grand Total</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.grade === 'Class 11').length}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.grade === 'Class 11').length * 4}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.grade === 'Class 12').length}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.grade === 'Class 12').length * 4}</td>
+                          <td className="border border-slate-300 p-3 text-center">100.00%</td>
+                          <td className="border border-slate-300 p-3 text-center">100.00%</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Stacked Bar Chart */}
+                <div className={cn(
+                  "p-8 rounded-3xl border shadow-sm",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <h3 className={cn("text-xl font-bold mb-6 text-center", theme === 'light' ? "text-slate-900" : "text-white")}>Class Wise Number of Questions</h3>
+                  <div className="h-[400px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={Array.from(new Set(questions.map(q => q.subject))).map(sub => ({
+                          name: sub,
+                          XI: questions.filter(q => q.subject === sub && q.grade === 'Class 11').length,
+                          XII: questions.filter(q => q.subject === sub && q.grade === 'Class 12').length
+                        }))}
+                        margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="name" fontSize={12} fontWeight="bold" />
+                        <YAxis fontSize={12} fontWeight="bold" />
+                        <RechartsTooltip cursor={{ fill: 'transparent' }} />
+                        <Legend verticalAlign="top" align="right" layout="vertical" />
+                        <Bar dataKey="XI" stackId="a" fill="#4A86B8" barSize={60} />
+                        <Bar dataKey="XII" stackId="a" fill="#B85450" barSize={60} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className={cn(
+                  "md:col-span-2 p-8 rounded-3xl border shadow-sm space-y-6",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Performance Analysis</h2>
+                      <p className="text-slate-500 text-sm">Know your strengths in 30 seconds</p>
+                    </div>
+                    <div className="p-3 bg-indigo-50 rounded-2xl">
+                      <TrendingUp className="w-6 h-6 text-indigo-600" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    {[
+                      { label: 'Accuracy', value: `${Math.round((calculateResults().correct / questions.length) * 100)}%`, icon: Target, color: 'text-emerald-600' },
+                      { label: 'Avg Time/Q', value: `${Math.round(timeElapsed / questions.length)}s`, icon: Clock, color: 'text-indigo-600' },
+                      { label: 'Score', value: `${calculateResults().totalMarks}`, icon: Trophy, color: 'text-amber-500' },
+                      { label: 'Efficiency', value: calculateResults().correct > 0 ? `${Math.round((calculateResults().correct / (timeElapsed / 60)) * 10) / 10} Q/m` : '0 Q/m', icon: Zap, color: 'text-fuchsia-600' }
+                    ].map((stat, i) => (
+                      <div key={i} className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800/50 border-slate-700")}>
+                        <stat.icon className={cn("w-5 h-5 mb-2", stat.color)} />
+                        <div className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{stat.value}</div>
+                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{stat.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-4 pt-4">
+                    <h3 className={cn("font-bold text-sm uppercase tracking-wider", theme === 'light' ? "text-slate-400" : "text-slate-500")}>Topic Performance Breakdown</h3>
+                    <div className="h-[350px] w-full mt-4">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={Array.from(new Set(questions.map(q => q.topic))).map(topic => {
+                            const topicQs = questions.filter(q => q.topic === topic);
+                            const correct = topicQs.filter((q) => {
+                              const qIdx = questions.findIndex(item => item.id === q.id);
+                              return String(userAnswers[qIdx]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
+                            }).length;
+                            return { name: topic, correct, total: topicQs.length };
+                          })}
+                          margin={{ top: 20, right: 30, left: 0, bottom: 70 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={theme === 'light' ? '#f1f5f9' : '#1e293b'} />
+                          <XAxis 
+                            dataKey="name" 
+                            angle={-45} 
+                            textAnchor="end" 
+                            interval={0} 
+                            height={80}
+                            fontSize={12}
+                            fontWeight="bold"
+                            stroke={theme === 'light' ? '#475569' : '#94a3b8'}
+                          />
+                          <YAxis 
+                            fontSize={12}
+                            fontWeight="bold"
+                            stroke={theme === 'light' ? '#475569' : '#94a3b8'}
+                            allowDecimals={false}
+                          />
+                          <RechartsTooltip 
+                            cursor={{ fill: 'rgba(79, 70, 229, 0.05)' }}
+                            contentStyle={{ 
+                              borderRadius: '16px', 
+                              border: 'none', 
+                              boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)',
+                              backgroundColor: theme === 'light' ? '#fff' : '#0f172a',
+                              color: theme === 'light' ? '#1e293b' : '#f8fafc'
+                            }}
+                          />
+                          <Bar dataKey="correct" radius={[6, 6, 0, 0]} barSize={32}>
+                            {Array.from(new Set(questions.map(q => q.topic))).map((_, index) => (
+                              <Cell key={`cell-${index}`} fill={['#6366f1', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4'][index % 6]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <div className={cn(
+                    "p-8 rounded-3xl border shadow-sm",
+                    theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                  )}>
+                    <h3 className={cn("font-bold mb-6 flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
+                      <PieChartIcon className="w-5 h-5 text-indigo-600" /> Accuracy Distribution
+                    </h3>
+                    <div className="h-[200px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={[
+                              { name: 'Correct', value: calculateResults().correct, color: '#10b981' },
+                              { name: 'Incorrect', value: calculateResults().incorrect, color: '#f43f5e' },
+                              { name: 'Unattempted', value: calculateResults().unattempted, color: '#94a3b8' }
+                            ]}
+                            innerRadius={60}
+                            outerRadius={80}
+                            paddingAngle={5}
+                            dataKey="value"
+                          >
+                            {[
+                              { color: '#10b981' },
+                              { color: '#f43f5e' },
+                              { color: '#94a3b8' }
+                            ].map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-2 mt-4">
+                      {[
+                        { label: 'Correct', value: calculateResults().correct, color: 'bg-emerald-500' },
+                        { label: 'Incorrect', value: calculateResults().incorrect, color: 'bg-rose-500' },
+                        { label: 'Unattempted', value: calculateResults().unattempted, color: 'bg-slate-400' }
+                      ].map((item, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs font-bold">
+                          <div className="flex items-center gap-2">
+                            <div className={cn("w-2 h-2 rounded-full", item.color)} />
+                            <span className="text-slate-500">{item.label}</span>
+                          </div>
+                          <span className={theme === 'light' ? "text-slate-900" : "text-white"}>{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className={cn(
+                    "p-8 rounded-3xl border shadow-sm",
+                    theme === 'light' ? "bg-indigo-600 text-white" : "bg-indigo-900 border-indigo-800 text-indigo-100"
+                  )}>
+                    <div className="flex items-center gap-2 mb-4">
+                      <BrainCircuit className="w-6 h-6" />
+                      <h3 className="font-bold">Smart Summary</h3>
+                    </div>
+                    <p className="text-sm opacity-90 leading-relaxed">
+                      You completed the {selectedSubject} quiz in {formatTime(timeElapsed)}. 
+                      Your strongest topic was <span className="font-bold underline">
+                        {Array.from(new Set(questions.map(q => q.topic))).map(topic => {
+                          const topicQs = questions.filter(q => q.topic === topic);
+                          const correct = topicQs.filter((q, i) => {
+                            const qIdx = questions.indexOf(q);
+                            return String(userAnswers[qIdx]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
+                          }).length;
+                          return { name: topic, accuracy: correct / topicQs.length };
+                        }).sort((a, b) => b.accuracy - a.accuracy)[0]?.name || 'N/A'}
+                      </span>. 
+                      {calculateResults().incorrect > 0 ? " Focus on reviewing your incorrect answers to improve conceptual clarity." : " Perfect accuracy! You have a strong grasp of these concepts."}
+                    </p>
+                    <button 
+                      onClick={() => setView('results')}
+                      className="w-full mt-6 py-3 bg-white/20 hover:bg-white/30 rounded-xl font-bold text-sm transition-all"
+                    >
+                      Review Answers
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
           {view === 'results' && (
             <motion.div
               key="results"
@@ -798,17 +1303,37 @@ export default function App() {
 
                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
                   <button
+                    onClick={() => setView('report')}
+                    className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
+                  >
+                    <BarChart3 className="w-5 h-5" />
+                    Performance Report
+                  </button>
+                  <button
+                    onClick={() => {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set('subject', selectedSubject || '');
+                      url.searchParams.set('examType', examType);
+                      navigator.clipboard.writeText(url.toString());
+                      alert('Quiz link copied! Share it with your friends.');
+                    }}
+                    className="px-8 py-3 bg-white border-2 border-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Share2 className="w-5 h-5" />
+                    Share
+                  </button>
+                  <button
                     onClick={() => startQuiz(selectedSubject!)}
-                    className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
+                    className="px-8 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                   >
                     <RefreshCw className="w-5 h-5" />
                     Try Again
                   </button>
                   <button
-                    onClick={() => setView('home')}
-                    className="px-8 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                    onClick={resetQuiz}
+                    className="px-8 py-3 border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all"
                   >
-                    Back to Subjects
+                    Home
                   </button>
                 </div>
               </div>

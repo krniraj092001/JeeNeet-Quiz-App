@@ -24,3 +24,13 @@
 .markdown-body strong {
   @apply font-semibold text-indigo-600;
 }
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}

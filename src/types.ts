@@ -1,7 +1,7 @@
 import { Type } from "@google/genai";
 
 export type Language = 'English' | 'Hindi';
-export type ExamType = 'NEET' | 'JEE' | 'Combined' | 'JEE_BOOKS' | 'NEET_BOOKS' | 'MS_CHOUHAN' | 'BLACK_BOOK' | 'NARENDRA_AVASTHI' | 'DPP' | 'JEE_MAIN_MOCK';
+export type ExamType = 'NEET' | 'JEE' | 'Combined' | 'JEE_BOOKS' | 'NEET_BOOKS' | 'MS_CHOUHAN' | 'BLACK_BOOK' | 'NARENDRA_AVASTHI' | 'DPP' | 'JEE_MAIN_MOCK' | 'NEET_MOCK';
 
 export interface Question {
   id: string;
@@ -12,6 +12,7 @@ export interface Question {
   explanation: string;
   subject: string;
   topic: string;
+  grade: 'Class 11' | 'Class 12';
   difficulty: 'Easy' | 'Moderate' | 'Hard';
   language: Language;
   examType: ExamType;
@@ -47,6 +48,7 @@ export const QUIZ_SCHEMA = {
         description: "Detailed step-by-step explanation. Use LaTeX for formulas." 
       },
       topic: { type: Type.STRING, description: "Specific topic within the subject" },
+      grade: { type: Type.STRING, description: "Academic grade: 'Class 11' or 'Class 12'" },
       difficulty: { 
         type: Type.STRING, 
         description: "Difficulty level: Easy, Moderate, or Hard" 
