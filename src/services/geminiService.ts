@@ -1,13 +1,16 @@
 import { GoogleGenAI } from "@google/genai";
 import { Question, QUIZ_SCHEMA, Language, ExamType } from "../types";
+import { jsonrepair } from "jsonrepair";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-export async function generateQuestions(
+const BATCH_SIZE = 15;
+
+async function generateBatch(
   subject: string, 
   language: Language,
   examType: ExamType,
-  count: number = 15, 
+  count: number, 
   filesData?: { data: string, mimeType: string }[],
   retryCount: number = 0
 ): Promise<Question[]> {
@@ -33,92 +36,38 @@ export async function generateQuestions(
   The questions should involve complex numerical calculations, conceptual depth, and multiple concepts.
   Ensure the difficulty is "Hard" or "Advanced".` : ''}
   
-  ${examType === 'JEE_MAIN_MOCK' ? `Generate a full JEE Main Mock Test. 
+  ${examType === 'JEE_MAIN_MOCK' ? `Generate a high-quality set of questions for a JEE Main Mock Test. 
   CRITICAL: You MUST generate EXACTLY ${count} questions in total.
   
-  Follow the 2020-2025 Trend Analysis for chapter weightage:
-  
-  PHYSICS WEIGHTAGE (High Priority Chapters):
-  - Modern Physics (Dual Nature, Atoms, Nuclei): ~3-4 questions
-  - Electrostatics & Current Electricity: ~3-4 questions
-  - Magnetic Effects of Current & EMI/AC: ~3-4 questions
-  - Optics (Ray & Wave): ~2-3 questions
-  - Thermodynamics & KTG: ~2 questions
-  - Mechanics (Laws of Motion, Work Energy, Rotational): ~3-4 questions
-  - Properties of Matter & Gravitation: ~2 questions
-  - Oscillations & Waves: ~1-2 questions
-  
-  CHEMISTRY WEIGHTAGE (High Priority Chapters):
-  - Organic Chemistry (GOC, Hydrocarbons, Carbonyls): ~8-9 questions
-  - Physical Chemistry (Thermodynamics, Equilibrium, Kinetics, Solutions): ~8-9 questions
-  - Inorganic Chemistry (Coordination, p-block, Chemical Bonding): ~7-8 questions
-  - Specific focus on: Atomic Structure, Chemical Bonding, Solutions, Equilibrium, and Redox/Electrochemistry.
-  
-  MATHEMATICS WEIGHTAGE (High Priority Chapters):
-  - Calculus (Limits, Continuity, Differentiation, Integration): ~8-9 questions
-  - Algebra (Matrices, Determinants, Probability, Complex Numbers): ~8-9 questions
-  - Coordinate Geometry & Vectors/3D: ~7-8 questions
-  - Trigonometry: ~2 questions
+  Follow the 2020-2025 Trend Analysis for chapter weightage.
+  Ensure a mix of Physics, Chemistry, and Mathematics if applicable to the subject ${subject}.
   
   For EACH subject section:
-  - 20 questions should be Multiple Choice (MCQ) with 4 options.
-  - 5 questions should be Numerical Value Type (NUMERICAL) where the answer is a specific number.
+  - Questions should be Multiple Choice (MCQ) with 4 options or Numerical Value Type (NUMERICAL).
   
   Follow the 2026 JEE Main pattern (+4 for correct, -1 for wrong). 
-  Ensure a mix of Easy, Moderate, and Hard difficulty across all subjects.` : ''}
+  Ensure a mix of Easy, Moderate, and Hard difficulty.` : ''}
 
   ${examType === 'NEET_MOCK' ? `Generate a high-quality set of questions for a NEET Mock Test. 
   CRITICAL: You MUST generate EXACTLY ${count} questions for the subject: ${subject}.
   
-  Follow the 2013-2025 Trend Analysis for ${subject} weightage:
-  
-  ${subject.includes('Physics') ? `PHYSICS WEIGHTAGE (Proportional to ${count} questions):
-  - Mechanics (Units, Motion, Laws of Motion, Work, Rotation, Gravitation): ~32%
-  - Electrodynamics (Electrostatics, Current, Magnetism, EMI/AC): ~30%
-  - Modern Physics & Electronics: ~18%
-  - Optics (Ray & Wave): ~10%
-  - Heat & Thermodynamics: ~7%
-  - Properties of Matter, Oscillations & Waves: ~3%` : ''}
-  
-  ${subject.includes('Chemistry') ? `CHEMISTRY WEIGHTAGE (Proportional to ${count} questions):
-  - Organic Chemistry (Hydrocarbons, Carbonyls, Amines, Biomolecules): ~33%
-  - Inorganic Chemistry (Chemical Bonding, p-block, d & f block, Coordination): ~33%
-  - Physical Chemistry (Thermodynamics, Equilibrium, Kinetics, Electrochemistry, Solutions): ~34%
-  - Specific focus on: Chemical Bonding, Hydrocarbons, Aldehydes & Ketones, and p-Block elements.` : ''}
-  
-  ${subject.includes('Biology') || subject.includes('Botany') || subject.includes('Zoology') ? `BIOLOGY WEIGHTAGE (Proportional to ${count} questions):
-  ${subject.includes('Botany') ? `BOTANY SPECIFIC WEIGHTAGE:
-  - Genetics & Evolution (Molecular Basis, Principles of Inheritance): ~24%
-  - Cell Biology (Unit of Life, Cycle & Division): ~14%
-  - Plant Physiology (Respiration, Photosynthesis, Growth): ~14%
-  - Structural Organization (Anatomy, Morphology): ~13%
-  - Diversity in Living World (Plant Kingdom, Biological Classification): ~15%
-  - Reproduction in Plants: ~6%
-  - Ecology & Environment: ~12%` : `ZOOLOGY SPECIFIC WEIGHTAGE:
-  - Human Physiology: ~35%
-  - Reproduction & Reproductive Health: ~15%
-  - Genetics & Evolution: ~15%
-  - Biology in Human Welfare: ~10%
-  - Biotechnology & its Applications: ~15%
-  - Animal Kingdom & Structural Organization: ~10%`} ` : ''}
-  
+  Follow the 2013-2025 Trend Analysis for ${subject} weightage.
   All questions MUST be Multiple Choice (MCQ) with 4 options.
   Follow the NEET pattern (+4 for correct, -1 for wrong).
   
   CRITICAL DIFFICULTY & STYLE GUIDELINES (Based on 2025 trends):
   - Overall Difficulty: 28% Hard, 38% Moderate, 33% Easy.
   - Shift away from direct memorization towards conceptual and application-based questions.
-  - PHYSICS (Toughest): Focus on complex, formula-based, analytical, and numerical-heavy problems. Ensure they are lengthy and challenging.
-  - CHEMISTRY (Moderate): Blend theoretical knowledge with tricky, application-based questions.
-  - BIOLOGY (Moderate/Lengthy): NCERT-based but highly conceptual. Focus on Genetics and Biotechnology with non-direct, time-consuming questions.` : ''}
+  - PHYSICS: Focus on analytical and numerical-heavy problems.
+  - CHEMISTRY: Blend theoretical knowledge with tricky, application-based questions.
+  - BIOLOGY: NCERT-based but highly conceptual.` : ''}
   
   IMPORTANT: 
   1. Use LaTeX for ALL mathematical formulas, chemical equations, and symbols. 
   2. Wrap inline LaTeX in single dollar signs like $E=mc^2$ and block LaTeX in double dollar signs like $$\\int x dx$$.
   3. Ensure the questions are challenging and include detailed step-by-step explanations in ${language}.
   4. Categorize each question as either 'Class 11' or 'Class 12' based on the standard NCERT curriculum.
-  5. The difficulty should be a mix of Easy, Moderate, and Hard (unless specified otherwise).
-  ${count > 30 ? '6. Since the question count is high, keep explanations concise but accurate.' : ''}`;
+  5. The difficulty should be a mix of Easy, Moderate, and Hard (unless specified otherwise).`;
 
   if (filesData && filesData.length > 0) {
     prompt = `I have provided ${filesData.length} document(s). 
@@ -126,12 +75,10 @@ export async function generateQuestions(
     The questions should be in ${language} for the subject ${subject} at ${examType} level.
     
     Guidelines for Document-Based Generation:
-    1. You MUST generate EXACTLY ${count} questions. Do not generate more or fewer than this number.
-    2. Every question must be directly derived from information, concepts, or problems present in the uploaded files.
+    1. You MUST generate EXACTLY ${count} questions.
+    2. Every question must be directly derived from the uploaded files.
     3. Use LaTeX for all formulas, equations, and symbols.
-    4. Follow the ${examType} pattern for question style.
-    5. Include detailed step-by-step explanations in ${language} that reference the document content where applicable.
-    6. Ensure the difficulty matches the source material.`;
+    4. Include detailed step-by-step explanations in ${language}.`;
   }
 
   try {
@@ -151,19 +98,18 @@ export async function generateQuestions(
       model: "gemini-3-flash-preview",
       contents: contents,
       config: {
-        systemInstruction: "You are an expert exam paper setter. You must ALWAYS return a complete, valid JSON array of objects. Never truncate the response. If the requested question count is high, ensure every single question is fully formed and the JSON structure is perfectly closed. If you run out of space, prioritize finishing the current question and closing the JSON array correctly.",
+        systemInstruction: "You are an expert exam paper setter. You must ALWAYS return a complete, valid JSON array of objects. Never truncate the response. If you run out of space, ensure the JSON is still valid by closing all open brackets and braces.",
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
         temperature: 0.4,
-        maxOutputTokens: 65536, 
+        maxOutputTokens: 16384, 
       },
     });
 
     let text = response.text || "[]";
     
-    // Attempt to fix truncated JSON if necessary
     try {
-      // Remove potential markdown code blocks if the model ignored responseMimeType
+      // Clean up potential markdown artifacts
       if (text.includes("```json")) {
         text = text.split("```json")[1].split("```")[0];
       } else if (text.includes("```")) {
@@ -171,52 +117,75 @@ export async function generateQuestions(
       }
       text = text.trim();
 
-      // If text doesn't end with ']', it might be truncated
-      if (!text.endsWith(']')) {
-        console.warn("Detected potentially truncated JSON response. Attempting to repair...");
-        // Find the last complete object
-        const lastObjectIndex = text.lastIndexOf('}');
-        if (lastObjectIndex !== -1) {
-          text = text.substring(0, lastObjectIndex + 1) + ']';
-        }
-      }
-      
-      const rawQuestions = JSON.parse(text);
+      // Use jsonrepair to handle truncation or minor syntax errors
+      const repairedJson = jsonrepair(text);
+      const rawQuestions = JSON.parse(repairedJson);
       
       if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
         throw new Error("Empty or invalid response from AI");
       }
 
-      return rawQuestions.map((q: any, index: number) => ({
+      return rawQuestions.map((q: any) => ({
         ...q,
-        id: `${subject}-${Date.now()}-${index}`,
         subject,
         language,
         examType
       }));
     } catch (parseError) {
       console.error("Failed to parse AI response as JSON:", parseError);
-      throw new Error("The AI response was truncated or invalid. Please try again with a smaller question count.");
+      throw new Error("The AI response was invalid. Please try again.");
     }
   } catch (error: any) {
-    console.error("Error generating questions:", error);
+    console.error("Error generating batch:", error);
     
-    // Retry logic for transient errors (max 5 retries)
-    // Don't retry if it's a 400 error (Invalid Argument, like page limit)
     const isClientError = error?.status === "INVALID_ARGUMENT" || error?.message?.includes("400");
     const isRpcError = error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error") || error?.status === "UNKNOWN";
     const isRateLimit = error?.status === "RESOURCE_EXHAUSTED" || error?.message?.includes("429") || error?.message?.includes("quota");
     
-    if (retryCount < 5 && (!isClientError || isRpcError || isRateLimit)) {
-      // Longer delay for rate limits (exponential backoff with jitter)
-      const baseDelay = isRateLimit ? 8000 : 2000;
-      const jitter = Math.random() * 1000;
-      const delay = Math.pow(2, retryCount) * baseDelay + jitter; 
-      console.log(`Retrying question generation in ${Math.round(delay)}ms (Attempt ${retryCount + 2})...`);
+    if (retryCount < 3 && (!isClientError || isRpcError || isRateLimit)) {
+      const baseDelay = isRateLimit ? 5000 : 1000;
+      const delay = Math.pow(2, retryCount) * baseDelay + Math.random() * 1000; 
       await new Promise(resolve => setTimeout(resolve, delay));
-      return generateQuestions(subject, language, examType, count, filesData, retryCount + 1);
+      return generateBatch(subject, language, examType, count, filesData, retryCount + 1);
     }
     
+    throw error;
+  }
+}
+
+export async function generateQuestions(
+  subject: string, 
+  language: Language,
+  examType: ExamType,
+  count: number = 15, 
+  filesData?: { data: string, mimeType: string }[]
+): Promise<Question[]> {
+  if (count <= BATCH_SIZE) {
+    const questions = await generateBatch(subject, language, examType, count, filesData);
+    return questions.map((q, index) => ({
+      ...q,
+      id: `${subject}-${Date.now()}-${index}`
+    }));
+  }
+
+  const numBatches = Math.ceil(count / BATCH_SIZE);
+  const batchPromises = [];
+
+  for (let i = 0; i < numBatches; i++) {
+    const currentBatchCount = Math.min(BATCH_SIZE, count - (i * BATCH_SIZE));
+    batchPromises.push(generateBatch(subject, language, examType, currentBatchCount, filesData));
+  }
+
+  try {
+    const results = await Promise.all(batchPromises);
+    const allQuestions = results.flat();
+
+    return allQuestions.map((q, index) => ({
+      ...q,
+      id: `${subject}-${Date.now()}-${index}`
+    }));
+  } catch (error) {
+    console.error("Error in parallel generation:", error);
     throw error;
   }
 }

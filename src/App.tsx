@@ -34,13 +34,9 @@ import {
   Target,
   TrendingUp,
   Zap,
-  Share2,
   Copy,
-  Link,
-  Download
+  Link
 } from 'lucide-react';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { 
   BarChart, 
   Bar, 
@@ -134,8 +130,8 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
   { id: 'MS_CHOUHAN', label: 'M.S. Chouhan Organic', desc: 'Advanced Organic Chemistry Problems' },
   { id: 'BLACK_BOOK', label: 'Black Book Math', desc: 'Advanced Problems in Mathematics for JEE' },
   { id: 'NARENDRA_AVASTHI', label: 'N. Avasthi Physical', desc: 'Problems in Physical Chemistry for JEE' },
-  { id: 'JEE_MAIN_MOCK', label: 'JEE Main 2026 Mock', desc: '75 Qs (25 P, 25 C, 25 M) | 3 Hours | +4/-1' },
-  { id: 'NEET_MOCK', label: 'NEET 2026 Mock', desc: '200 Qs | 3h 20m | 2025-Style Conceptual Difficulty' },
+  { id: 'JEE_MAIN_MOCK', label: 'JEE Main 2026 Mock', desc: 'Customizable Qs (P, C, M) | 3 Hours | +4/-1' },
+  { id: 'NEET_MOCK', label: 'NEET 2026 Mock', desc: 'Customizable Qs | 3h 20m | 2025-Style Conceptual Difficulty' },
 ];
 
 export default function App() {
@@ -256,29 +252,43 @@ export default function App() {
 
       let qs: Question[] = [];
       
-      if (subject === 'JEE Main Mock') {
-        // Sequential generation for JEE Mock to avoid rate limits
+      if (subject === 'JEE Main Mock' || examType === 'JEE_MAIN_MOCK') {
+        // Parallel generation for JEE Mock subjects
         const subjects = ['Physics', 'Chemistry', 'Mathematics'];
-        for (const sub of subjects) {
-          const batch = await generateQuestions(sub, language, 'JEE_MAIN_MOCK', 25, undefined);
-          qs.push(...batch);
-          // Increased delay between subjects to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
+        const countPerSubject = Math.floor(currentCount / 3);
+        const remainder = currentCount % 3;
+        
+        const subjectPromises = subjects.map((sub, i) => {
+          const subCount = countPerSubject + (i < remainder ? 1 : 0);
+          if (subCount > 0) {
+            return generateQuestions(sub, language, 'JEE_MAIN_MOCK', subCount, undefined);
+          }
+          return Promise.resolve([]);
+        });
+
+        const results = await Promise.all(subjectPromises);
+        qs = results.flat();
       } else if (subject === 'NEET 2026 Mock' || examType === 'NEET_MOCK') {
-        // Sequential generation for NEET Mock to avoid rate limits
+        // Parallel generation for NEET Mock subjects
         const subjectConfigs = [
-          { name: 'Physics', count: 50 },
-          { name: 'Chemistry', count: 50 },
-          { name: 'Biology (Botany)', count: 50 },
-          { name: 'Biology (Zoology)', count: 50 }
+          { name: 'Physics' },
+          { name: 'Chemistry' },
+          { name: 'Biology (Botany)' },
+          { name: 'Biology (Zoology)' }
         ];
-        for (const config of subjectConfigs) {
-          const batch = await generateQuestions(config.name, language, 'NEET_MOCK', config.count, undefined);
-          qs.push(...batch);
-          // Increased delay between subjects to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
+        const countPerSubject = Math.floor(currentCount / 4);
+        const remainder = currentCount % 4;
+
+        const subjectPromises = subjectConfigs.map((config, i) => {
+          const subCount = countPerSubject + (i < remainder ? 1 : 0);
+          if (subCount > 0) {
+            return generateQuestions(config.name, language, 'NEET_MOCK', subCount, undefined);
+          }
+          return Promise.resolve([]);
+        });
+
+        const results = await Promise.all(subjectPromises);
+        qs = results.flat();
       } else {
         if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
         if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';
@@ -303,7 +313,7 @@ export default function App() {
       if (currentExamType === 'JEE_MAIN_MOCK') {
         setTimeLimit(180 * 60); // 3 hours
       } else if (currentExamType === 'NEET_MOCK') {
-        setTimeLimit(200 * 60); // 3 hours 20 minutes
+        setTimeLimit(200 * 60); // 3 hours 20 minutes (200 minutes)
       } else {
         setTimeLimit(currentCount * minutesPerQuestion * 60);
       }
@@ -369,27 +379,6 @@ export default function App() {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const downloadReport = async () => {
-    if (!reportRef.current) return;
-    try {
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: theme === 'light' ? '#ffffff' : '#0f172a'
-      });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Report_${selectedSubject}_${new Date().toLocaleDateString()}.pdf`);
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Failed to download report. Please try again.');
-    }
   };
 
   const calculateResults = () => {
@@ -514,7 +503,7 @@ export default function App() {
               </div>
 
               {/* Selection Options */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Language Selection */}
                 <div className={cn(
                   "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
@@ -586,6 +575,43 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+
+                {/* Theme Selection */}
+                <div className={cn(
+                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <h3 className={cn("font-bold flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
+                    <Sun className="w-5 h-5 text-indigo-600" />
+                    Select Theme
+                  </h3>
+                  <div className="grid grid-cols-1 gap-3">
+                    <button
+                      onClick={() => setTheme('light')}
+                      className={cn(
+                        "py-3 px-4 rounded-xl border-2 font-semibold transition-all flex items-center justify-center gap-2",
+                        theme === 'light' 
+                          ? "border-indigo-600 bg-indigo-50 text-indigo-700" 
+                          : "border-slate-800 text-slate-500 hover:border-slate-700"
+                      )}
+                    >
+                      <Sun className="w-4 h-4" />
+                      Light Mode
+                    </button>
+                    <button
+                      onClick={() => setTheme('dark')}
+                      className={cn(
+                        "py-3 px-4 rounded-xl border-2 font-semibold transition-all flex items-center justify-center gap-2",
+                        theme === 'dark' 
+                          ? "border-indigo-600 bg-indigo-900/20 text-indigo-400" 
+                          : "border-slate-100 text-slate-500 hover:border-slate-200"
+                      )}
+                    >
+                      <Moon className="w-4 h-4" />
+                      Dark Mode
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* File Upload Section */}
@@ -641,25 +667,18 @@ export default function App() {
                         </div>
                         <input 
                           type="range" 
-                          min="15" 
-                          max="90" 
+                          min="0" 
+                          max="200" 
                           step="5"
                           value={questionCount} 
                           onChange={(e) => setQuestionCount(parseInt(e.target.value))}
-                          disabled={examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' || selectedSubject === 'JEE Main Mock' || selectedSubject === 'NEET 2026 Mock'}
                           className={cn(
-                            "w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600",
-                            (examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' || selectedSubject === 'JEE Main Mock' || selectedSubject === 'NEET 2026 Mock') && "opacity-50 cursor-not-allowed"
+                            "w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                           )}
                         />
-                        {(examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' || selectedSubject === 'JEE Main Mock' || selectedSubject === 'NEET 2026 Mock') && (
-                          <p className="text-[9px] text-indigo-500 font-bold uppercase tracking-tight text-center mt-1">
-                            Fixed count for {(examType === 'JEE_MAIN_MOCK' || selectedSubject === 'JEE Main Mock') ? 'JEE Main' : 'NEET'} Mock
-                          </p>
-                        )}
                         <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
-                          <span>15</span>
-                          <span>90</span>
+                          <span>0</span>
+                          <span>200</span>
                         </div>
                       </div>
                     </div>
@@ -971,8 +990,9 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               className="space-y-8 pb-20"
+              ref={reportRef}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between no-print">
                 <button 
                   onClick={() => setView('results')}
                   className="flex items-center gap-2 text-slate-500 font-bold hover:text-indigo-600 transition-colors"
@@ -980,19 +1000,6 @@ export default function App() {
                   <ArrowLeft className="w-5 h-5" /> Back to Results
                 </button>
                 <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => {
-                      const url = new URL(window.location.href);
-                      url.searchParams.set('subject', selectedSubject || '');
-                      url.searchParams.set('examType', examType);
-                      navigator.clipboard.writeText(url.toString());
-                      alert('Link copied! Share this quiz with others.');
-                    }}
-                    className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
-                    title="Share Quiz"
-                  >
-                    <Share2 className="w-5 h-5" />
-                  </button>
                   <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-full text-indigo-600 font-bold text-sm">
                     <Sparkles className="w-4 h-4" /> FullyPass Smart Report
                   </div>
@@ -1000,6 +1007,93 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 gap-8">
+                {/* Difficulty Wise Distribution Table */}
+                <div className={cn(
+                  "p-8 rounded-3xl border shadow-sm overflow-hidden",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <h3 className={cn("text-xl font-bold mb-6", theme === 'light' ? "text-slate-900" : "text-white")}>Question Wise Difficulty</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="bg-[#D9EAD3] text-[#274E13]">
+                          <th rowSpan={2} className="border border-slate-300 p-3 text-left font-bold">Subject</th>
+                          <th colSpan={2} className="border border-slate-300 p-3 text-center font-bold">Easy Level</th>
+                          <th colSpan={2} className="border border-slate-300 p-3 text-center font-bold">Medium Level</th>
+                          <th colSpan={2} className="border border-slate-300 p-3 text-center font-bold">Difficult Level</th>
+                        </tr>
+                        <tr className="bg-[#D9EAD3] text-[#274E13]">
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">No of Questions</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Total Marks</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">No of Questions</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Total Marks</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">No of Questions</th>
+                          <th className="border border-slate-300 p-2 text-center text-xs font-bold">Total Marks</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(new Set(questions.map(q => q.subject))).map((sub, idx) => {
+                          const subQs = questions.filter(q => q.subject === sub);
+                          const easy = subQs.filter(q => q.difficulty === 'Easy');
+                          const medium = subQs.filter(q => q.difficulty === 'Moderate');
+                          const hard = subQs.filter(q => q.difficulty === 'Hard');
+                          
+                          return (
+                            <tr key={idx} className={theme === 'light' ? "hover:bg-slate-50" : "hover:bg-slate-800"}>
+                              <td className={cn("border border-slate-300 p-3 font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{sub}</td>
+                              <td className="border border-slate-300 p-3 text-center">{easy.length}</td>
+                              <td className="border border-slate-300 p-3 text-center">{easy.length * 4}</td>
+                              <td className="border border-slate-300 p-3 text-center">{medium.length}</td>
+                              <td className="border border-slate-300 p-3 text-center">{medium.length * 4}</td>
+                              <td className="border border-slate-300 p-3 text-center">{hard.length}</td>
+                              <td className="border border-slate-300 p-3 text-center">{hard.length * 4}</td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="bg-[#D9EAD3] text-[#274E13] font-bold">
+                          <td className="border border-slate-300 p-3">Grand Total</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.difficulty === 'Easy').length}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.difficulty === 'Easy').length * 4}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.difficulty === 'Moderate').length}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.difficulty === 'Moderate').length * 4}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.difficulty === 'Hard').length}</td>
+                          <td className="border border-slate-300 p-3 text-center">{questions.filter(q => q.difficulty === 'Hard').length * 4}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Difficulty Stacked Bar Chart */}
+                <div className={cn(
+                  "p-8 rounded-3xl border shadow-sm",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <h3 className={cn("text-xl font-bold mb-6 text-center", theme === 'light' ? "text-slate-900" : "text-white")}>Question Wise Difficulty Chart</h3>
+                  <div className="h-[400px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={Array.from(new Set(questions.map(q => q.subject))).map(sub => ({
+                          name: sub,
+                          Easy: questions.filter(q => q.subject === sub && q.difficulty === 'Easy').length,
+                          Medium: questions.filter(q => q.subject === sub && q.difficulty === 'Moderate').length,
+                          Difficult: questions.filter(q => q.subject === sub && q.difficulty === 'Hard').length
+                        }))}
+                        margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="name" fontSize={12} fontWeight="bold" />
+                        <YAxis fontSize={12} fontWeight="bold" />
+                        <RechartsTooltip cursor={{ fill: 'transparent' }} />
+                        <Legend verticalAlign="top" align="right" layout="vertical" />
+                        <Bar dataKey="Easy" stackId="a" fill="#4A86B8" barSize={60} />
+                        <Bar dataKey="Medium" stackId="a" fill="#B85450" barSize={60} />
+                        <Bar dataKey="Difficult" stackId="a" fill="#92D050" barSize={60} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
                 {/* Professional Data Table */}
                 <div className={cn(
                   "p-8 rounded-3xl border shadow-sm overflow-hidden",
@@ -1308,19 +1402,6 @@ export default function App() {
                   >
                     <BarChart3 className="w-5 h-5" />
                     Performance Report
-                  </button>
-                  <button
-                    onClick={() => {
-                      const url = new URL(window.location.href);
-                      url.searchParams.set('subject', selectedSubject || '');
-                      url.searchParams.set('examType', examType);
-                      navigator.clipboard.writeText(url.toString());
-                      alert('Quiz link copied! Share it with your friends.');
-                    }}
-                    className="px-8 py-3 bg-white border-2 border-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
-                  >
-                    <Share2 className="w-5 h-5" />
-                    Share
                   </button>
                   <button
                     onClick={() => startQuiz(selectedSubject!)}

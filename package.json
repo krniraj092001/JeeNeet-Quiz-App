@@ -19,6 +19,7 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "html2canvas": "^1.4.1",
+    "jsonrepair": "^3.13.2",
     "jspdf": "^4.2.0",
     "katex": "^0.16.28",
     "lucide-react": "^0.546.0",
@@ -41,7 +42,4 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
-}
-{
-  "packageManager": "pnpm@7.5.1"
 }
