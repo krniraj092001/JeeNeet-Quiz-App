@@ -182,32 +182,30 @@ export async function generateQuestions(
   count: number = 15, 
   filesData?: { data: string, mimeType: string }[]
 ): Promise<Question[]> {
-  if (count <= BATCH_SIZE) {
-    const questions = await generateBatch(subject, language, examType, count, filesData);
-    return questions.map((q, index) => ({
-      ...q,
-      id: `${subject}-${Date.now()}-${index}`
-    }));
-  }
-
+  const allQuestions: Question[] = [];
   const numBatches = Math.ceil(count / BATCH_SIZE);
-  const batchPromises = [];
 
   for (let i = 0; i < numBatches; i++) {
     const currentBatchCount = Math.min(BATCH_SIZE, count - (i * BATCH_SIZE));
-    batchPromises.push(generateBatch(subject, language, examType, currentBatchCount, filesData));
+    
+    // Add a small delay between batches to avoid hitting rate limits (RPM)
+    // especially for large mock tests
+    if (i > 0) {
+      const delay = 1500; // 1.5 second delay between batches
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    try {
+      const batchQuestions = await generateBatch(subject, language, examType, currentBatchCount, filesData);
+      allQuestions.push(...batchQuestions);
+    } catch (error) {
+      console.error(`Error in batch ${i + 1}:`, error);
+      throw error; // Re-throw to be handled by the UI
+    }
   }
 
-  try {
-    const results = await Promise.all(batchPromises);
-    const allQuestions = results.flat();
-
-    return allQuestions.map((q, index) => ({
-      ...q,
-      id: `${subject}-${Date.now()}-${index}`
-    }));
-  } catch (error) {
-    console.error("Error in parallel generation:", error);
-    throw error;
-  }
+  return allQuestions.map((q, index) => ({
+    ...q,
+    id: `${subject}-${Date.now()}-${index}`
+  }));
 }

@@ -255,23 +255,23 @@ export default function App() {
       let qs: Question[] = [];
       
       if (subject === 'JEE Main Mock' || examType === 'JEE_MAIN_MOCK') {
-        // Parallel generation for JEE Mock subjects
+        // Sequential generation for JEE Mock subjects to respect rate limits
         const subjects = ['Physics', 'Chemistry', 'Mathematics'];
         const countPerSubject = Math.floor(currentCount / 3);
         const remainder = currentCount % 3;
         
-        const subjectPromises = subjects.map((sub, i) => {
+        for (let i = 0; i < subjects.length; i++) {
+          const sub = subjects[i];
           const subCount = countPerSubject + (i < remainder ? 1 : 0);
           if (subCount > 0) {
-            return generateQuestions(sub, language, 'JEE_MAIN_MOCK', subCount, undefined);
+            const subjectQs = await generateQuestions(sub, language, 'JEE_MAIN_MOCK', subCount, undefined);
+            qs.push(...subjectQs);
+            // Small gap between subjects
+            if (i < subjects.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
           }
-          return Promise.resolve([]);
-        });
-
-        const results = await Promise.all(subjectPromises);
-        qs = results.flat();
+        }
       } else if (subject === 'NEET 2026 Mock' || examType === 'NEET_MOCK') {
-        // Parallel generation for NEET Mock subjects
+        // Sequential generation for NEET Mock subjects to respect rate limits
         const subjectConfigs = [
           { name: 'Physics' },
           { name: 'Chemistry' },
@@ -281,16 +281,16 @@ export default function App() {
         const countPerSubject = Math.floor(currentCount / 4);
         const remainder = currentCount % 4;
 
-        const subjectPromises = subjectConfigs.map((config, i) => {
+        for (let i = 0; i < subjectConfigs.length; i++) {
+          const config = subjectConfigs[i];
           const subCount = countPerSubject + (i < remainder ? 1 : 0);
           if (subCount > 0) {
-            return generateQuestions(config.name, language, 'NEET_MOCK', subCount, undefined);
+            const subjectQs = await generateQuestions(config.name, language, 'NEET_MOCK', subCount, undefined);
+            qs.push(...subjectQs);
+            // Small gap between subjects
+            if (i < subjectConfigs.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
           }
-          return Promise.resolve([]);
-        });
-
-        const results = await Promise.all(subjectPromises);
-        qs = results.flat();
+        }
       } else {
         if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
         if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';

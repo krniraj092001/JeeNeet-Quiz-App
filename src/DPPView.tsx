@@ -19,14 +19,14 @@ interface DPPViewProps {
 const LatexMarkdown = ({ content }: { content: string }) => {
   if (!content) return null;
   return (
-    <div className="markdown-body max-w-none text-slate-900">
+    <span className="markdown-body max-w-none text-slate-900 inline-block align-top">
       <Markdown 
         remarkPlugins={[remarkMath]} 
         rehypePlugins={[rehypeKatex]}
       >
         {content}
       </Markdown>
-    </div>
+    </span>
   );
 };
 
@@ -37,17 +37,26 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
     if (!dppRef.current) return;
     
     const element = dppRef.current;
+    
+    // Create a toast or loading state if needed, but for now just proceed
     const canvas = await html2canvas(element, {
-      scale: 2,
+      scale: 3, // Increased scale for better quality
       useCORS: true,
       logging: false,
-      windowWidth: element.scrollWidth,
-      windowHeight: element.scrollHeight,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowWidth: 800, // Fixed width for consistent layout
       onclone: (clonedDoc) => {
         const dpp = clonedDoc.getElementById('dpp-content');
         if (dpp) {
-          // 1. First, find all elements and convert their computed styles to inline styles
-          // specifically targeting colors that might use oklch/oklab
+          // 1. Force styles for the capture
+          dpp.style.width = '800px';
+          dpp.style.margin = '0 auto';
+          dpp.style.padding = '60px'; // Increased padding for professional look
+          dpp.style.boxShadow = 'none';
+          dpp.style.border = 'none';
+          dpp.style.display = 'block';
+
           const allElements = dpp.getElementsByTagName('*');
           const elementsArray = Array.from(allElements);
           
@@ -55,24 +64,36 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
             const htmlEl = el as HTMLElement;
             const style = window.getComputedStyle(htmlEl);
             
-            // Properties to fix
-            const colorProps = ['color', 'backgroundColor', 'borderColor', 'borderTopColor', 'borderBottomColor', 'borderLeftColor', 'borderRightColor'];
+            // Fix text spacing issues that cause weird gaps
+            htmlEl.style.letterSpacing = 'normal';
+            htmlEl.style.wordSpacing = 'normal';
+            htmlEl.style.fontVariantLigatures = 'none';
+            htmlEl.style.textAlign = style.textAlign;
+
+            // Capture essential layout and typography styles
+            const propsToCapture = [
+              'color', 'backgroundColor', 'borderColor', 'borderTopColor', 'borderBottomColor', 
+              'fontSize', 'fontWeight', 'fontFamily', 'lineHeight', 'padding', 'margin',
+              'display', 'flexDirection', 'alignItems', 'justifyContent', 'gap',
+              'width', 'height', 'borderRadius', 'borderWidth', 'borderStyle'
+            ];
             
-            colorProps.forEach(prop => {
+            propsToCapture.forEach(prop => {
               const val = style.getPropertyValue(prop);
-              if (val && (val.includes('oklch') || val.includes('oklab'))) {
-                // Replace with hex fallbacks
-                if (prop.includes('background')) htmlEl.style.setProperty(prop, '#ffffff', 'important');
-                else if (prop.includes('border')) htmlEl.style.setProperty(prop, '#e2e8f0', 'important');
-                else htmlEl.style.setProperty(prop, '#0f172a', 'important');
-              } else if (val) {
-                // Even if it's not oklch, setting it inline helps when we remove stylesheets
-                htmlEl.style.setProperty(prop, val, 'important');
+              if (val && val !== 'rgba(0, 0, 0, 0)' && val !== 'transparent' && val !== 'none') {
+                // Special handling for oklch/oklab
+                if (val.includes('oklch') || val.includes('oklab')) {
+                  if (prop.includes('background')) htmlEl.style.setProperty(prop, '#ffffff', 'important');
+                  else if (prop.includes('border')) htmlEl.style.setProperty(prop, '#e2e8f0', 'important');
+                  else htmlEl.style.setProperty(prop, '#0f172a', 'important');
+                } else {
+                  htmlEl.style.setProperty(prop, val, 'important');
+                }
               }
             });
           });
 
-          // 2. Now remove all style tags and link tags to prevent html2canvas from parsing them
+          // 2. Remove problematic tags AFTER capturing styles
           const styles = clonedDoc.getElementsByTagName('style');
           const links = clonedDoc.getElementsByTagName('link');
           for (let i = styles.length - 1; i >= 0; i--) styles[i].remove();
@@ -83,24 +104,50 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
       }
     });
     
-    const imgData = canvas.toDataURL('image/png');
+    const imgData = canvas.toDataURL('image/jpeg', 1.0);
     const pdf = new jsPDF('p', 'mm', 'a4');
-    const imgProps = pdf.getImageProperties(imgData);
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
     
-    let heightLeft = pdfHeight;
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    
+    const imgWidth = canvas.width;
+    const imgHeight = canvas.height;
+    
+    // Calculate how many pages we need
+    const ratio = pdfWidth / (imgWidth / 3); // /3 because scale was 3
+    const canvasPageHeight = (pdfHeight / ratio) * 3;
+    
+    let heightLeft = imgHeight;
     let position = 0;
-    const pageHeight = pdf.internal.pageSize.getHeight();
+    let page = 1;
 
-    pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft >= 0) {
-      position = heightLeft - pdfHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
+    while (heightLeft > 0) {
+      // Create a temporary canvas for each page to avoid blurry text at page breaks
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = imgWidth;
+      pageCanvas.height = Math.min(canvasPageHeight, heightLeft);
+      
+      const ctx = pageCanvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(
+          canvas,
+          0, position, imgWidth, pageCanvas.height,
+          0, 0, imgWidth, pageCanvas.height
+        );
+        
+        const pageData = pageCanvas.toDataURL('image/jpeg', 1.0);
+        
+        if (page > 1) pdf.addPage();
+        
+        const pWidth = pdfWidth;
+        const pHeight = (pageCanvas.height / 3) * ratio;
+        
+        pdf.addImage(pageData, 'JPEG', 0, 0, pWidth, pHeight);
+      }
+      
+      position += pageCanvas.height;
+      heightLeft -= pageCanvas.height;
+      page++;
     }
     
     pdf.save(`DPP_1_${subject.replace(/\s+/g, '_')}.pdf`);
@@ -135,12 +182,14 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
 
       <div 
         ref={dppRef}
-        className="bg-white text-slate-900 p-12 shadow-2xl mx-auto max-w-[800px] border border-slate-200 min-h-[1123px] font-serif"
+        className="bg-white text-slate-900 p-[60px] shadow-2xl mx-auto w-[800px] border border-slate-200 min-h-[1123px] font-serif"
         id="dpp-content"
         style={{
           color: '#0f172a',
           backgroundColor: '#ffffff',
-          borderColor: '#e2e8f0'
+          borderColor: '#e2e8f0',
+          width: '800px',
+          padding: '60px'
         }}
       >
         {/* Page 1: Header & Stats */}
@@ -284,19 +333,19 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
           <div className="space-y-4">
             <h3 className="text-sm font-bold uppercase tracking-wider">Learnings:</h3>
             <p className="text-[10px] italic text-slate-500">Write your 3 learnings from questions in this DPP:</p>
-            <div className="space-y-6 pt-4">
-              <div className="border-b border-slate-300 pb-1 text-xs">I learnt:</div>
-              <div className="border-b border-slate-300 pb-1 text-xs">I learnt:</div>
-              <div className="border-b border-slate-300 pb-1 text-xs">I learnt:</div>
+            <div className="space-y-8 pt-6">
+              <div className="border-b border-slate-300 pb-2 text-xs text-slate-400">1. I learnt: __________________________________________________________________________</div>
+              <div className="border-b border-slate-300 pb-2 text-xs text-slate-400">2. I learnt: __________________________________________________________________________</div>
+              <div className="border-b border-slate-300 pb-2 text-xs text-slate-400">3. I learnt: __________________________________________________________________________</div>
             </div>
           </div>
         </div>
 
         {/* Page 2+: Questions */}
         <div className="break-before-page pt-12">
-          <div className="flex justify-between text-[10px] font-bold border-b pb-2 mb-8">
+          <div className="flex justify-between text-[10px] font-bold border-b pb-2 mb-8 border-slate-200">
             <span>DPP 1</span>
-            <span className="uppercase tracking-widest">{subject}</span>
+            <span className="uppercase tracking-[0.2em] text-indigo-600">{subject}</span>
           </div>
 
           {/* Speed Drill Section */}
@@ -417,20 +466,22 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
 
 const QuestionItem = ({ question, index }: { question: Question, index: number }) => {
   return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <span className="font-bold text-sm shrink-0">Q{index}</span>
-        <div className="text-sm leading-relaxed">
+    <div className="space-y-4 pb-4 border-b border-slate-50 last:border-0">
+      <div className="flex gap-4">
+        <span className="font-bold text-sm shrink-0 min-w-[28px]">Q{index}.</span>
+        <div className="text-sm leading-relaxed flex-1">
           <LatexMarkdown content={question.text} />
         </div>
       </div>
       
       {question.type === 'MCQ' && question.options && (
-        <div className="grid grid-cols-2 gap-x-8 gap-y-2 pl-8">
+        <div className="grid grid-cols-2 gap-x-12 gap-y-3 pl-12">
           {question.options.map((option, idx) => (
-            <div key={idx} className="flex gap-2 text-xs">
-              <span className="font-bold">({idx + 1})</span>
-              <LatexMarkdown content={option} />
+            <div key={idx} className="flex gap-3 text-xs items-start">
+              <span className="font-bold text-slate-400">({idx + 1})</span>
+              <div className="flex-1">
+                <LatexMarkdown content={option} />
+              </div>
             </div>
           ))}
         </div>
