@@ -4,7 +4,7 @@ import { jsonrepair } from "jsonrepair";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-const BATCH_SIZE = 15;
+const BATCH_SIZE = 10;
 
 async function generateBatch(
   subject: string, 
@@ -63,11 +63,14 @@ async function generateBatch(
   - BIOLOGY: NCERT-based but highly conceptual.` : ''}
   
   IMPORTANT: 
-  1. Use LaTeX for ALL mathematical formulas, chemical equations, and symbols. 
-  2. Wrap inline LaTeX in single dollar signs like $E=mc^2$ and block LaTeX in double dollar signs like $$\\int x dx$$.
-  3. Ensure the questions are challenging and include detailed step-by-step explanations in ${language}.
-  4. Categorize each question as either 'Class 11' or 'Class 12' based on the standard NCERT curriculum.
-  5. The difficulty should be a mix of Easy, Moderate, and Hard (unless specified otherwise).`;
+  1. Use LaTeX for ALL mathematical formulas, chemical equations, and technical symbols. 
+  2. CRITICAL: ALL LaTeX MUST be wrapped in dollar signs. Use single dollar signs for inline math (e.g., $E=mc^2$) and double dollar signs for block math (e.g., $$\\int x dx$$).
+  3. For chemical formulas, use proper LaTeX notation (e.g., $H_2O$, $SO_4^{2-}$, $C_6H_{12}O_6$). Never use plain text like "H2O" or "ch3".
+  4. Ensure the output is clean. Do not include raw LaTeX commands in the text unless they are wrapped in dollar signs for rendering.
+  5. CRITICAL JSON FORMATTING: You are returning JSON. All backslashes in LaTeX MUST be escaped with another backslash (e.g., write "\\\\frac" instead of "\\frac").
+  6. Include detailed step-by-step explanations in ${language}, using block LaTeX for derivations.
+  7. Categorize each question as either 'Class 11' or 'Class 12' based on the standard NCERT curriculum.
+  8. The difficulty should be a mix of Easy, Moderate, and Hard (unless specified otherwise).`;
 
   if (filesData && filesData.length > 0) {
     prompt = `I have provided ${filesData.length} document(s). 
@@ -98,7 +101,7 @@ async function generateBatch(
       model: "gemini-3-flash-preview",
       contents: contents,
       config: {
-        systemInstruction: "You are an expert exam paper setter. You must ALWAYS return a complete, valid JSON array of objects. Never truncate the response. If you run out of space, ensure the JSON is still valid by closing all open brackets and braces.",
+        systemInstruction: "You are an expert exam paper setter. You must ALWAYS return a complete, valid JSON array of objects. CRITICAL: Use proper LaTeX for all mathematical formulas, chemical equations, and technical symbols. ALL LaTeX must be valid and properly escaped for JSON (use double backslashes for LaTeX commands, e.g., \\\\frac instead of \\frac). Ensure every property name and string value is enclosed in double quotes. Never truncate the response mid-object.",
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
         temperature: 0.4,
@@ -109,20 +112,26 @@ async function generateBatch(
     let text = response.text || "[]";
     
     try {
-      // Clean up potential markdown artifacts
-      if (text.includes("```json")) {
-        text = text.split("```json")[1].split("```")[0];
-      } else if (text.includes("```")) {
-        text = text.split("```")[1].split("```")[0];
+      // Clean up potential markdown artifacts more robustly
+      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
+      if (jsonMatch) {
+        text = jsonMatch[1];
       }
       text = text.trim();
+      
+      // If the text starts with [ and ends with ], it's likely the JSON array we want
+      const firstBracket = text.indexOf('[');
+      const lastBracket = text.lastIndexOf(']');
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        text = text.substring(firstBracket, lastBracket + 1);
+      }
 
       // Use jsonrepair to handle truncation or minor syntax errors
       const repairedJson = jsonrepair(text);
       const rawQuestions = JSON.parse(repairedJson);
       
       if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
-        throw new Error("Empty or invalid response from AI");
+        throw new Error("Empty or invalid response from JonyBhai");
       }
 
       return rawQuestions.map((q: any) => ({
@@ -131,9 +140,17 @@ async function generateBatch(
         language,
         examType
       }));
-    } catch (parseError) {
-      console.error("Failed to parse AI response as JSON:", parseError);
-      throw new Error("The AI response was invalid. Please try again.");
+    } catch (parseError: any) {
+      console.error("Failed to parse JonyBhai response as JSON:", parseError);
+      
+      // Retry on parsing errors
+      if (retryCount < 3) {
+        const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return generateBatch(subject, language, examType, count, filesData, retryCount + 1);
+      }
+      
+      throw new Error("The JonyBhai response was invalid after multiple attempts. Please try again.");
     }
   } catch (error: any) {
     console.error("Error generating batch:", error);

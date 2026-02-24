@@ -58,6 +58,7 @@ import rehypeKatex from 'rehype-katex';
 import { Question, Language, ExamType } from './types';
 import { generateQuestions } from './services/geminiService';
 import { cn } from './utils';
+import { DPPView } from './DPPView';
 
 const SUBJECTS = [
   { 
@@ -132,11 +133,12 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
   { id: 'NARENDRA_AVASTHI', label: 'N. Avasthi Physical', desc: 'Problems in Physical Chemistry for JEE' },
   { id: 'JEE_MAIN_MOCK', label: 'JEE Main 2026 Mock', desc: 'Customizable Qs (P, C, M) | 3 Hours | +4/-1' },
   { id: 'NEET_MOCK', label: 'NEET 2026 Mock', desc: 'Customizable Qs | 3h 20m | 2025-Style Conceptual Difficulty' },
+  { id: 'DPP', label: 'Daily Practice Paper', desc: 'Custom DPP from your notes or syllabus' },
 ];
 
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready'>('home');
+  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp'>('home');
   const [language, setLanguage] = useState<Language>('English');
   const [examType, setExamType] = useState<ExamType>('NEET');
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -239,7 +241,7 @@ export default function App() {
     setView('quiz');
   };
 
-  const startQuiz = async (subject: string) => {
+  const startQuiz = async (subject: string, overrideExamType?: ExamType) => {
     setLoading(true);
     setSelectedSubject(subject);
     try {
@@ -247,7 +249,7 @@ export default function App() {
       await new Promise(resolve => setTimeout(resolve, 500));
       
       let displaySubject = subject;
-      let currentExamType = examType;
+      let currentExamType = overrideExamType || examType;
       let currentCount = questionCount;
 
       let qs: Question[] = [];
@@ -318,19 +320,23 @@ export default function App() {
         setTimeLimit(currentCount * minutesPerQuestion * 60);
       }
       
-      setView('ready');
+      if (currentExamType === 'DPP') {
+        setView('dpp');
+      } else {
+        setView('ready');
+      }
     } catch (error: any) {
       console.error("Quiz generation error:", error);
       let errorMessage = "Failed to load questions. ";
       
       if (error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error")) {
-        errorMessage += "The AI service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
+        errorMessage += "The JonyBhai service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
       } else if (error?.status === "RESOURCE_EXHAUSTED" || error?.message?.includes("429") || error?.message?.includes("quota")) {
         errorMessage = "API Rate Limit Exceeded. You've made too many requests in a short time. Please wait about 60 seconds and try again.";
       } else if (error?.message?.includes("exceeds the supported page limit of 1000")) {
         errorMessage = "The uploaded document is too large. Gemini API supports a maximum of 1000 pages per document. Please upload a smaller file or split your PDF.";
       } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
-        errorMessage += "The AI service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
+        errorMessage += "The JonyBhai service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
       } else {
         errorMessage += "Please ensure your internet connection is stable and try again.";
       }
@@ -406,16 +412,22 @@ export default function App() {
     return { correct, incorrect, unattempted, totalMarks, maxMarks };
   };
 
-  const LatexMarkdown = ({ content }: { content: string }) => (
-    <div className="markdown-body">
-      <Markdown 
-        remarkPlugins={[remarkMath]} 
-        rehypePlugins={[rehypeKatex]}
-      >
-        {content}
-      </Markdown>
-    </div>
-  );
+  const LatexMarkdown = ({ content }: { content: string }) => {
+    if (!content) return null;
+    return (
+      <div className={cn(
+        "markdown-body max-w-none",
+        theme === 'light' ? "text-slate-900" : "text-slate-100"
+      )}>
+        <Markdown 
+          remarkPlugins={[remarkMath]} 
+          rehypePlugins={[rehypeKatex]}
+        >
+          {content}
+        </Markdown>
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -449,9 +461,12 @@ export default function App() {
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={resetQuiz}>
             <GraduationCap className={cn("w-8 h-8", theme === 'light' ? "text-indigo-600" : "text-indigo-400")} />
-            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>JeeNeet Quiz</span>
+            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Masterbate with Jonybhai</span>
           </div>
           <div className="flex items-center gap-4">
+            <span className={cn("text-sm font-bold hidden md:block", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+              Jonybhai(Niraj YADAV)
+            </span>
             <button
               onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
               className={cn(
@@ -492,7 +507,7 @@ export default function App() {
                   "text-4xl md:text-5xl font-bold tracking-tight",
                   theme === 'light' ? "text-slate-900" : "text-white"
                 )}>
-                  Master your exams with <span className="text-indigo-600">NITian Alumni</span>
+                  Masterbate your exams with <span className="text-indigo-600">Jonybhai(Niraj YADAV)</span>
                 </h1>
                 <p className={cn(
                   "text-lg max-w-2xl mx-auto",
@@ -528,6 +543,9 @@ export default function App() {
                         {lang.label}
                       </button>
                     ))}
+                  </div>
+                  <div className="pt-2 border-t border-slate-100/50">
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Jonybhai</span>
                   </div>
                 </div>
 
@@ -663,13 +681,27 @@ export default function App() {
                       <div className="space-y-2">
                         <div className="flex justify-between items-end">
                           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Number of Questions</label>
-                          <span className="text-sm font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">{questionCount}</span>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="number"
+                              min="1"
+                              max="200"
+                              value={questionCount}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) setQuestionCount(Math.min(200, Math.max(1, val)));
+                              }}
+                              className={cn(
+                                "w-16 text-center text-sm font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border-none focus:ring-1 focus:ring-indigo-500",
+                              )}
+                            />
+                          </div>
                         </div>
                         <input 
                           type="range" 
-                          min="0" 
+                          min="1" 
                           max="200" 
-                          step="5"
+                          step="1"
                           value={questionCount} 
                           onChange={(e) => setQuestionCount(parseInt(e.target.value))}
                           className={cn(
@@ -677,32 +709,53 @@ export default function App() {
                           )}
                         />
                         <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
-                          <span>0</span>
+                          <span>1</span>
                           <span>200</span>
                         </div>
                       </div>
                     </div>
                     
-                    <button
-                      onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'))}
-                      disabled={uploadedFiles.length === 0 && !selectedSubject}
-                      className={cn(
-                        "w-full py-4 mt-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
-                        (uploadedFiles.length > 0 || selectedSubject)
-                          ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
-                          : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <PlayCircle className="w-5 h-5" />
-                        <span>Create Exam Quiz</span>
-                      </div>
-                      <span className="text-[10px] opacity-80 font-medium">
+                    <div className="grid grid-cols-2 gap-3 mt-4">
+                      <button
+                        onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'))}
+                        disabled={uploadedFiles.length === 0 && !selectedSubject}
+                        className={cn(
+                          "py-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
+                          (uploadedFiles.length > 0 || selectedSubject)
+                            ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100" 
+                            : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <PlayCircle className="w-5 h-5" />
+                          <span className="text-sm">Exam Quiz</span>
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'), 'DPP')}
+                        disabled={uploadedFiles.length === 0 && !selectedSubject}
+                        className={cn(
+                          "py-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
+                          (uploadedFiles.length > 0 || selectedSubject)
+                            ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100" 
+                            : "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-5 h-5" />
+                          <span className="text-sm">Create DPP</span>
+                        </div>
+                      </button>
+                    </div>
+
+                    <div className="mt-2 text-center">
+                      <span className={cn("text-[10px] opacity-80 font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
                         {uploadedFiles.length > 0 
                           ? `From ${uploadedFiles.length} uploaded file(s)` 
                           : selectedSubject ? `For ${selectedSubject}` : "Select a subject or upload files"}
                       </span>
-                    </button>
+                    </div>
                   </div>
                 </div>
 
@@ -772,12 +825,12 @@ export default function App() {
                   <div className="p-2 bg-indigo-100 rounded-lg">
                     <BrainCircuit className="w-6 h-6 text-indigo-600" />
                   </div>
-                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why JeeNeet Quiz?</h2>
+                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why Masterbate with Jonybhai?</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   <div className="space-y-2">
                     <h4 className={cn("font-semibold", theme === 'light' ? "text-slate-800" : "text-slate-200")}>Dynamic Questions</h4>
-                    <p className={cn("text-sm", theme === 'light' ? "text-slate-600" : "text-slate-400")}>Never see the same question twice. AI generates fresh content every time.</p>
+                    <p className={cn("text-sm", theme === 'light' ? "text-slate-600" : "text-slate-400")}>Never see the same question twice. JonyBhai generates fresh content every time.</p>
                   </div>
                   <div className="space-y-2">
                     <h4 className={cn("font-semibold", theme === 'light' ? "text-slate-800" : "text-slate-200")}>Detailed Solutions</h4>
@@ -789,6 +842,22 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            </motion.div>
+          )}
+
+          {view === 'dpp' && (
+            <motion.div
+              key="dpp"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="max-w-5xl mx-auto"
+            >
+              <DPPView 
+                questions={questions} 
+                subject={selectedSubject || 'General'} 
+                onBack={() => setView('home')}
+                theme={theme}
+              />
             </motion.div>
           )}
 
@@ -877,7 +946,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="space-y-6"
+              className="space-y-6 relative z-50"
             >
               <div className="flex items-center justify-between mb-2">
                 <button 
@@ -936,8 +1005,8 @@ export default function App() {
                         className={cn(
                           "p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between group",
                           userAnswers[currentIndex] === idx
-                            ? "border-indigo-600 bg-indigo-50"
-                            : "border-slate-100 hover:border-slate-200 hover:bg-slate-50"
+                            ? (theme === 'light' ? "border-indigo-600 bg-indigo-50" : "border-indigo-500 bg-indigo-950/30")
+                            : (theme === 'light' ? "border-slate-100 hover:border-slate-200 hover:bg-slate-50" : "border-slate-800 hover:border-slate-700 hover:bg-slate-800/50")
                         )}
                       >
                         <div className="flex items-center gap-4">
@@ -945,13 +1014,15 @@ export default function App() {
                             "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
                             userAnswers[currentIndex] === idx
                               ? "bg-indigo-600 text-white"
-                              : "bg-slate-100 text-slate-500 group-hover:bg-slate-200"
+                              : (theme === 'light' ? "bg-slate-100 text-slate-500 group-hover:bg-slate-200" : "bg-slate-800 text-slate-400 group-hover:bg-slate-700")
                           )}>
                             {String.fromCharCode(65 + idx)}
                           </span>
                           <div className={cn(
-                            "font-medium",
-                            userAnswers[currentIndex] === idx ? "text-indigo-900" : "text-slate-700"
+                            "font-bold text-lg",
+                            userAnswers[currentIndex] === idx 
+                              ? (theme === 'light' ? "text-indigo-900" : "text-indigo-100") 
+                              : (theme === 'light' ? "text-slate-800" : "text-slate-200")
                           )}>
                             <LatexMarkdown content={option} />
                           </div>
@@ -1481,7 +1552,9 @@ export default function App() {
                             </div>
                             <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200/50">
                               <span className="text-slate-500 font-medium">Correct Answer:</span>
-                              <span className="font-bold text-emerald-600">{q.correctAnswer}</span>
+                              <span className="font-bold text-emerald-600">
+                                <LatexMarkdown content={String(q.correctAnswer)} />
+                              </span>
                             </div>
                           </div>
                         </div>
