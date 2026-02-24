@@ -2,7 +2,12 @@ import { GoogleGenAI } from "@google/genai";
 import { Question, QUIZ_SCHEMA, Language, ExamType } from "../types";
 import { jsonrepair } from "jsonrepair";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const getApiKey = () => {
+  const key = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  return key || "";
+};
+
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 const BATCH_SIZE = 10;
 

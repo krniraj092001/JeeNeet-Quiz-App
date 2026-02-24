@@ -338,7 +338,12 @@ export default function App() {
       } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
         errorMessage += "The JonyBhai service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
       } else {
-        errorMessage += "Please ensure your internet connection is stable and try again.";
+        const isMissingKey = error?.message?.includes("API key") || !process.env.GEMINI_API_KEY;
+        if (isMissingKey) {
+          errorMessage = "Gemini API Key is missing or invalid. If you've just deployed to Vercel, ensure you've added GEMINI_API_KEY to your Environment Variables and re-deployed.";
+        } else {
+          errorMessage += "Please ensure your internet connection is stable and try again. (Error: " + (error?.message || "Unknown") + ")";
+        }
       }
       
       alert(errorMessage);
