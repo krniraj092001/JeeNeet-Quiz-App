@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap');
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @import "katex/dist/katex.min.css";
@@ -6,6 +6,7 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Libre Baskerville", serif;
 
   /* Hex fallbacks for html2canvas compatibility */
   --color-indigo-50: #eef2ff;
@@ -163,8 +164,16 @@
   @apply text-sm leading-relaxed;
 }
 
+.markdown-body h3 {
+  @apply font-serif italic text-lg text-slate-800 mt-6 mb-1;
+}
+
+.markdown-body hr {
+  @apply border-slate-900 border-t-2 mb-4 mt-0;
+}
+
 .markdown-body p {
-  @apply mb-2;
+  @apply mb-4;
 }
 
 .markdown-body strong {
@@ -183,6 +192,10 @@
 }
 
 @layer utilities {
+  .bg-dots {
+    background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   BookOpen, 
@@ -35,8 +35,17 @@ import {
   TrendingUp,
   Zap,
   Copy,
-  Link
+  Link,
+  Download,
+  MessageSquare,
+  Volume2
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
+import DppTemplate from './components/DppTemplate';
+import LatexMarkdown from './components/LatexMarkdown';
+import DoubtSolver from './components/DoubtSolver';
+import { generateSpeech } from './services/geminiService';
 import { 
   BarChart, 
   Bar, 
@@ -56,7 +65,7 @@ import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Question, Language, ExamType } from './types';
-import { generateQuestions } from './services/geminiService';
+import { generateQuestions, chatDuringLoading } from './services/geminiService';
 import { cn } from './utils';
 import { DPPView } from './DPPView';
 
@@ -138,7 +147,7 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
 
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp'>('home');
+  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp' | 'doubt'>('home');
   const [language, setLanguage] = useState<Language>('English');
   const [examType, setExamType] = useState<ExamType>('NEET');
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -153,6 +162,32 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [questionTimes, setQuestionTimes] = useState<number[]>([]);
   const [lastQuestionStartTime, setLastQuestionStartTime] = useState<number>(0);
+  const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
+  const [difficulty, setDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+  const [loadingChatMessages, setLoadingChatMessages] = useState<{role: 'user' | 'assistant', content: string}[]>([]);
+  const [loadingChatInput, setLoadingChatInput] = useState("");
+  const [isLoadingChatReplying, setIsLoadingChatReplying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const handleSpeakExplanation = async (text: string, index: number) => {
+    if (speakingIndex === index) {
+      audioRef.current?.pause();
+      setSpeakingIndex(null);
+      return;
+    }
+
+    setSpeakingIndex(index);
+    try {
+      const url = await generateSpeech(text);
+      if (url && audioRef.current) {
+        audioRef.current.src = url;
+        audioRef.current.play();
+      }
+    } catch (err) {
+      console.error(err);
+      setSpeakingIndex(null);
+    }
+  };
   const [timeLimit, setTimeLimit] = useState(0);
   const reportRef = React.useRef<HTMLDivElement>(null);
 
@@ -173,9 +208,9 @@ export default function App() {
   // Auto-set question count for Mock Tests
   useEffect(() => {
     if (examType === 'JEE_MAIN_MOCK' || selectedSubject === 'JEE Main Mock') {
-      setQuestionCount(75);
+      setQuestionCount(25);
     } else if (examType === 'NEET_MOCK' || selectedSubject === 'NEET 2026 Mock') {
-      setQuestionCount(200);
+      setQuestionCount(25);
     }
   }, [examType, selectedSubject]);
 
@@ -223,6 +258,56 @@ export default function App() {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const downloadDpp = async () => {
+    setIsDownloading(true);
+    const element = document.getElementById('dpp-template');
+    if (!element) {
+      setIsDownloading(false);
+      return;
+    }
+
+    // Temporarily show the element for capture
+    element.style.display = 'block';
+    
+    try {
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: 1000
+      });
+      
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      
+      const imgWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(`DPP_${selectedSubject?.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      element.style.display = 'none';
+      setIsDownloading(false);
+    }
+  };
   const resetQuiz = () => {
     setView('home');
     setSelectedSubject(null);
@@ -266,8 +351,8 @@ export default function App() {
           if (subCount > 0) {
             const subjectQs = await generateQuestions(sub, language, 'JEE_MAIN_MOCK', subCount, undefined);
             qs.push(...subjectQs);
-            // Small gap between subjects
-            if (i < subjects.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
+            // Increased gap between subjects to respect 15 RPM
+            if (i < subjects.length - 1) await new Promise(resolve => setTimeout(resolve, 5000));
           }
         }
       } else if (subject === 'NEET 2026 Mock' || examType === 'NEET_MOCK') {
@@ -287,8 +372,8 @@ export default function App() {
           if (subCount > 0) {
             const subjectQs = await generateQuestions(config.name, language, 'NEET_MOCK', subCount, undefined);
             qs.push(...subjectQs);
-            // Small gap between subjects
-            if (i < subjectConfigs.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
+            // Increased gap between subjects to respect 15 RPM
+            if (i < subjectConfigs.length - 1) await new Promise(resolve => setTimeout(resolve, 5000));
           }
         }
       } else {
@@ -301,7 +386,8 @@ export default function App() {
           language,
           currentExamType,
           currentCount, 
-          uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined
+          uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined,
+          difficulty
         );
       }
       
@@ -338,9 +424,9 @@ export default function App() {
       } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
         errorMessage += "The JonyBhai service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
       } else {
-        const isMissingKey = error?.message?.includes("API key") || !process.env.GEMINI_API_KEY;
+        const isMissingKey = error?.message?.includes("API_KEY_MISSING") || error?.message?.includes("API key") || !process.env.GEMINI_API_KEY;
         if (isMissingKey) {
-          errorMessage = "Gemini API Key is missing or invalid. If you've just deployed to Vercel, ensure you've added GEMINI_API_KEY to your Environment Variables and re-deployed.";
+          errorMessage = "CRITICAL: Gemini API Key is missing. \n\n1. Go to Vercel Settings > Environment Variables. \n2. Add GEMINI_API_KEY. \n3. IMPORTANT: Go to 'Deployments' and click 'Redeploy' on your latest deployment. The app will NOT work until you redeploy.";
         } else {
           errorMessage += "Please ensure your internet connection is stable and try again. (Error: " + (error?.message || "Unknown") + ")";
         }
@@ -356,6 +442,14 @@ export default function App() {
     const newAnswers = [...userAnswers];
     newAnswers[currentIndex] = answer;
     setUserAnswers(newAnswers);
+  };
+
+  const skipQuestion = () => {
+    // Clear the answer for the current question when skipping
+    const newAnswers = [...userAnswers];
+    newAnswers[currentIndex] = null;
+    setUserAnswers(newAnswers);
+    nextQuestion();
   };
 
   const nextQuestion = () => {
@@ -417,27 +511,37 @@ export default function App() {
     return { correct, incorrect, unattempted, totalMarks, maxMarks };
   };
 
-  const LatexMarkdown = ({ content }: { content: string }) => {
-    if (!content) return null;
-    return (
-      <div className={cn(
-        "markdown-body max-w-none",
-        theme === 'light' ? "text-slate-900" : "text-slate-100"
-      )}>
-        <Markdown 
-          remarkPlugins={[remarkMath]} 
-          rehypePlugins={[rehypeKatex]}
-        >
-          {content}
-        </Markdown>
-      </div>
-    );
+  const handleLoadingChatSubmit = async (e?: React.FormEvent, customMsg?: string) => {
+    if (e) e.preventDefault();
+    const userMsg = customMsg || loadingChatInput.trim();
+    if (!userMsg || isLoadingChatReplying) return;
+
+    if (!customMsg) setLoadingChatInput("");
+    setLoadingChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setIsLoadingChatReplying(true);
+
+    try {
+      const reply = await chatDuringLoading([...loadingChatMessages, { role: 'user', content: userMsg }]);
+      setLoadingChatMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+    } catch (error) {
+      setLoadingChatMessages(prev => [...prev, { role: 'assistant', content: "Oops, I had a little hiccup. But don't worry, your quiz is still generating!" }]);
+    } finally {
+      setIsLoadingChatReplying(false);
+    }
   };
+
+  const CHAT_SUGGESTIONS = [
+    "How to increase sex power",
+    "How to make girlfriend",
+    "Give the name of the best sex position",
+    "How to increase body count",
+    "How to make body"
+  ];
 
   if (loading) {
     return (
       <div className={cn(
-        "min-h-screen flex flex-col items-center justify-center transition-colors duration-300",
+        "min-h-screen flex flex-col items-center justify-center transition-colors duration-300 p-4",
         theme === 'light' ? "bg-white text-slate-900" : "bg-slate-900 text-white"
       )}>
         <motion.div
@@ -447,8 +551,121 @@ export default function App() {
         >
           <BrainCircuit className="w-12 h-12 text-indigo-600" />
         </motion.div>
-        <h2 className="text-xl font-semibold">Generating your personalized quiz...</h2>
-        <p className="text-slate-500 mt-2">The quiz creation process usually takes 1 to 3 minutes.</p>
+        <h2 className="text-xl font-semibold mb-2">Generating your personalized quiz...</h2>
+        <p className="text-slate-500 mb-8 text-center max-w-md">The quiz creation process usually takes 1 to 3 minutes. Feel free to chat with me while you wait!</p>
+        
+        <div className={cn(
+          "w-full max-w-2xl rounded-2xl border shadow-lg overflow-hidden flex flex-col",
+          theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700",
+          "h-[400px]"
+        )}>
+          <div className={cn(
+            "p-4 border-b flex items-center gap-3",
+            theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-900/50 border-slate-700"
+          )}>
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
+              <MessageSquare className="w-4 h-4 text-indigo-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm">Jonybhai Assistant</h3>
+              <p className="text-[10px] text-slate-500">Online • Waiting for quiz generation</p>
+            </div>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {loadingChatMessages.length === 0 && (
+              <div className="space-y-4">
+                <div className="flex justify-start">
+                  <div className={cn(
+                    "max-w-[80%] rounded-2xl p-3 text-sm",
+                    theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-700 text-slate-200",
+                    "rounded-tl-sm"
+                  )}>
+                    Hi there! I'm creating your quiz right now. Ask me anything while we wait!
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {CHAT_SUGGESTIONS.map((suggestion, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => handleLoadingChatSubmit(undefined, suggestion)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-full text-[11px] font-medium transition-all",
+                        theme === 'light' 
+                          ? "bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100" 
+                          : "bg-indigo-900/30 text-indigo-400 hover:bg-indigo-900/50 border border-indigo-900/50"
+                      )}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {loadingChatMessages.map((msg, idx) => (
+              <div key={idx} className={cn(
+                "flex",
+                msg.role === 'user' ? "justify-end" : "justify-start"
+              )}>
+                <div className={cn(
+                  "max-w-[80%] rounded-2xl p-3 text-sm",
+                  msg.role === 'user' 
+                    ? "bg-indigo-600 text-white rounded-tr-sm" 
+                    : (theme === 'light' ? "bg-slate-100 text-slate-800 rounded-tl-sm" : "bg-slate-700 text-slate-200 rounded-tl-sm")
+                )}>
+                  <Markdown>{msg.content}</Markdown>
+                </div>
+              </div>
+            ))}
+            {isLoadingChatReplying && (
+              <div className="flex justify-start">
+                <div className={cn(
+                  "max-w-[80%] rounded-2xl p-3 text-sm flex items-center gap-2",
+                  theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-700 text-slate-200",
+                  "rounded-tl-sm"
+                )}>
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" />
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <form onSubmit={handleLoadingChatSubmit} className={cn(
+            "p-3 border-t",
+            theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700"
+          )}>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={loadingChatInput}
+                onChange={(e) => setLoadingChatInput(e.target.value)}
+                placeholder="Ask me anything..."
+                disabled={isLoadingChatReplying}
+                className={cn(
+                  "flex-1 px-4 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-sm",
+                  theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-900 border-slate-700 text-white"
+                )}
+              />
+              <button
+                type="submit"
+                disabled={!loadingChatInput.trim() || isLoadingChatReplying}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                Send
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="mt-8 flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-100 rounded-full">
+          <div className="flex -space-x-2">
+            <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] text-white font-bold">G</div>
+            <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] text-white font-bold">S</div>
+          </div>
+          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Grounded by Google Search</span>
+        </div>
       </div>
     );
   }
@@ -466,7 +683,7 @@ export default function App() {
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={resetQuiz}>
             <GraduationCap className={cn("w-8 h-8", theme === 'light' ? "text-indigo-600" : "text-indigo-400")} />
-            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Masterbate with Jonybhai</span>
+            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Master with Jonybhai</span>
           </div>
           <div className="flex items-center gap-4">
             <span className={cn("text-sm font-bold hidden md:block", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
@@ -512,7 +729,7 @@ export default function App() {
                   "text-4xl md:text-5xl font-bold tracking-tight",
                   theme === 'light' ? "text-slate-900" : "text-white"
                 )}>
-                  Masterbate your exams with <span className="text-indigo-600">Jonybhai(Niraj YADAV)</span>
+                  Master your exams with <span className="text-indigo-600">Jonybhai</span>
                 </h1>
                 <p className={cn(
                   "text-lg max-w-2xl mx-auto",
@@ -524,6 +741,146 @@ export default function App() {
 
               {/* Selection Options */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {/* Custom Quiz Builder Card */}
+                <div className={cn(
+                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 flex flex-col",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}>
+                  <h3 className={cn("font-bold flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
+                    <BookOpen className="w-5 h-5 text-indigo-600" />
+                    <span className="italic font-serif">Custom Quiz Builder</span>
+                  </h3>
+                  
+                  <div className="space-y-4 flex-1">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Topic / Chapter</label>
+                      <input 
+                        type="text"
+                        placeholder="e.g. Thermodynamics, Indian History..."
+                        value={selectedSubject || ''}
+                        onChange={(e) => setSelectedSubject(e.target.value)}
+                        className={cn(
+                          "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm",
+                          theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
+                        )}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Exam Type</label>
+                        <select
+                          value={examType}
+                          onChange={(e) => setExamType(e.target.value as ExamType)}
+                          className={cn(
+                            "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm appearance-none bg-transparent",
+                            theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
+                          )}
+                        >
+                          {EXAM_TYPES.map(type => (
+                            <option key={type.id} value={type.id}>{type.id}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Questions</label>
+                        <input 
+                          type="number"
+                          min="1"
+                          max="25"
+                          value={questionCount}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value);
+                            if (!isNaN(val)) setQuestionCount(Math.min(25, Math.max(1, val)));
+                          }}
+                          className={cn(
+                            "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm",
+                            theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
+                          )}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Difficulty</label>
+                      <div className={cn(
+                        "flex rounded-xl border overflow-hidden p-1 gap-1",
+                        theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
+                      )}>
+                        {['EASY', 'MEDIUM', 'HARD'].map(diff => (
+                          <button
+                            key={diff}
+                            onClick={() => setDifficulty(diff as any)}
+                            className={cn(
+                              "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
+                              difficulty === diff 
+                                ? "bg-indigo-600 text-white shadow-sm" 
+                                : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
+                            )}
+                          >
+                            {diff}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Medium (Language)</label>
+                      <div className={cn(
+                        "flex rounded-xl border overflow-hidden p-1 gap-1",
+                        theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
+                      )}>
+                        {LANGUAGES.map(lang => (
+                          <button
+                            key={lang.id}
+                            onClick={() => setLanguage(lang.id)}
+                            className={cn(
+                              "flex-1 py-2 text-xs font-bold rounded-lg transition-all uppercase",
+                              language === lang.id 
+                                ? "bg-indigo-600 text-white shadow-sm" 
+                                : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
+                            )}
+                          >
+                            {lang.id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => startQuiz(selectedSubject || 'General')}
+                    disabled={!selectedSubject}
+                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:shadow-none mt-auto"
+                  >
+                    <PlayCircle className="w-5 h-5" />
+                    GENERATE CUSTOM QUIZ
+                  </button>
+                </div>
+
+                {/* AI Doubt Solver Card */}
+                <div className={cn(
+                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 bg-gradient-to-br from-indigo-600 to-violet-700 text-white border-transparent",
+                )}>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold flex items-center gap-2 text-white">
+                      <Sparkles className="w-5 h-5 text-white" />
+                      AI Doubt Solver
+                    </h3>
+                    <span className="px-2 py-0.5 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest">New</span>
+                  </div>
+                  <p className="text-sm text-indigo-100 leading-relaxed">
+                    Stuck on a problem? Upload an image or type your doubt to get instant, detailed step-by-step solutions for JEE & NEET.
+                  </p>
+                  <button
+                    onClick={() => setView('doubt')}
+                    className="w-full py-3 bg-white text-indigo-600 rounded-xl font-bold hover:bg-indigo-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    Ask a Doubt
+                  </button>
+                </div>
+
                 {/* Language Selection */}
                 <div className={cn(
                   "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
@@ -690,11 +1047,11 @@ export default function App() {
                             <input 
                               type="number"
                               min="1"
-                              max="200"
+                              max="25"
                               value={questionCount}
                               onChange={(e) => {
                                 const val = parseInt(e.target.value);
-                                if (!isNaN(val)) setQuestionCount(Math.min(200, Math.max(1, val)));
+                                if (!isNaN(val)) setQuestionCount(Math.min(25, Math.max(1, val)));
                               }}
                               className={cn(
                                 "w-16 text-center text-sm font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border-none focus:ring-1 focus:ring-indigo-500",
@@ -705,7 +1062,7 @@ export default function App() {
                         <input 
                           type="range" 
                           min="1" 
-                          max="200" 
+                          max="25" 
                           step="1"
                           value={questionCount} 
                           onChange={(e) => setQuestionCount(parseInt(e.target.value))}
@@ -715,7 +1072,7 @@ export default function App() {
                         />
                         <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
                           <span>1</span>
-                          <span>200</span>
+                          <span>25</span>
                         </div>
                       </div>
                     </div>
@@ -830,7 +1187,7 @@ export default function App() {
                   <div className="p-2 bg-indigo-100 rounded-lg">
                     <BrainCircuit className="w-6 h-6 text-indigo-600" />
                   </div>
-                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why Masterbate with Jonybhai?</h2>
+                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why Master with Jonybhai?</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   <div className="space-y-2">
@@ -983,6 +1340,44 @@ export default function App() {
                   <div className={cn("text-2xl font-semibold leading-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <LatexMarkdown content={questions[currentIndex].text} />
                   </div>
+
+                  {questions[currentIndex].diagramUrl && (
+                    <div className="flex justify-center py-4">
+                      <img 
+                        src={questions[currentIndex].diagramUrl} 
+                        alt="Question Diagram" 
+                        className="max-w-full h-auto rounded-2xl border border-slate-200 shadow-sm"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
+
+                  {questions[currentIndex].type === 'MATCH' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
+                      <div className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-800 border-slate-700")}>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">List I</h4>
+                        <ul className="space-y-2">
+                          {questions[currentIndex].list1?.map((item, i) => (
+                            <li key={i} className="flex gap-3 text-sm">
+                              <span className="font-bold text-indigo-600">({String.fromCharCode(65 + i)})</span>
+                              <LatexMarkdown content={item} />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-800 border-slate-700")}>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">List II</h4>
+                        <ul className="space-y-2">
+                          {questions[currentIndex].list2?.map((item, i) => (
+                            <li key={i} className="flex gap-3 text-sm">
+                              <span className="font-bold text-indigo-600">({['I', 'II', 'III', 'IV', 'V'][i]})</span>
+                              <LatexMarkdown content={item} />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
@@ -1003,40 +1398,60 @@ export default function App() {
                       />
                     </div>
                   ) : (
-                    questions[currentIndex].options?.map((option, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => handleAnswer(idx)}
-                        className={cn(
-                          "p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between group",
-                          userAnswers[currentIndex] === idx
-                            ? (theme === 'light' ? "border-indigo-600 bg-indigo-50" : "border-indigo-500 bg-indigo-950/30")
-                            : (theme === 'light' ? "border-slate-100 hover:border-slate-200 hover:bg-slate-50" : "border-slate-800 hover:border-slate-700 hover:bg-slate-800/50")
-                        )}
-                      >
-                        <div className="flex items-center gap-4">
-                          <span className={cn(
-                            "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
-                            userAnswers[currentIndex] === idx
-                              ? "bg-indigo-600 text-white"
-                              : (theme === 'light' ? "bg-slate-100 text-slate-500 group-hover:bg-slate-200" : "bg-slate-800 text-slate-400 group-hover:bg-slate-700")
-                          )}>
-                            {String.fromCharCode(65 + idx)}
-                          </span>
-                          <div className={cn(
-                            "font-bold text-lg",
-                            userAnswers[currentIndex] === idx 
-                              ? (theme === 'light' ? "text-indigo-900" : "text-indigo-100") 
-                              : (theme === 'light' ? "text-slate-800" : "text-slate-200")
-                          )}>
-                            <LatexMarkdown content={option} />
-                          </div>
+                    <>
+                      {(!questions[currentIndex].options || questions[currentIndex].options.length === 0) && questions[currentIndex].type === 'MATCH' ? (
+                        <div className="space-y-4">
+                          <p className={cn("text-sm font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+                            Enter the correct matching sequence (e.g., A-I, B-II, C-III, D-IV):
+                          </p>
+                          <input 
+                            type="text"
+                            value={userAnswers[currentIndex] || ''}
+                            onChange={(e) => handleAnswer(e.target.value)}
+                            placeholder="Type your answer here..."
+                            className={cn(
+                              "w-full p-5 rounded-2xl border-2 text-xl font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all",
+                              theme === 'light' ? "bg-white border-slate-100" : "bg-slate-800 border-slate-700 text-white"
+                            )}
+                          />
                         </div>
-                        {userAnswers[currentIndex] === idx && (
-                          <CheckCircle2 className="w-5 h-5 text-indigo-600 shrink-0" />
-                        )}
-                      </button>
-                    ))
+                      ) : (
+                        questions[currentIndex].options?.map((option, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleAnswer(idx)}
+                            className={cn(
+                              "p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between group",
+                              userAnswers[currentIndex] === idx
+                                ? (theme === 'light' ? "border-indigo-600 bg-indigo-50" : "border-indigo-500 bg-indigo-950/30")
+                                : (theme === 'light' ? "border-slate-100 hover:border-slate-200 hover:bg-slate-50" : "border-slate-800 hover:border-slate-700 hover:bg-slate-800/50")
+                            )}
+                          >
+                            <div className="flex items-center gap-4">
+                              <span className={cn(
+                                "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
+                                userAnswers[currentIndex] === idx
+                                  ? "bg-indigo-600 text-white"
+                                  : (theme === 'light' ? "bg-slate-100 text-slate-500 group-hover:bg-slate-200" : "bg-slate-800 text-slate-400 group-hover:bg-slate-700")
+                              )}>
+                                {String.fromCharCode(65 + idx)}
+                              </span>
+                              <div className={cn(
+                                "font-bold text-lg",
+                                userAnswers[currentIndex] === idx 
+                                  ? (theme === 'light' ? "text-indigo-900" : "text-indigo-100") 
+                                  : (theme === 'light' ? "text-slate-800" : "text-slate-200")
+                              )}>
+                                <LatexMarkdown content={option} />
+                              </div>
+                            </div>
+                            {userAnswers[currentIndex] === idx && (
+                              <CheckCircle2 className="w-5 h-5 text-indigo-600 shrink-0" />
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -1048,13 +1463,25 @@ export default function App() {
                   >
                     Previous
                   </button>
-                  <button
-                    onClick={nextQuestion}
-                    disabled={userAnswers[currentIndex] === null}
-                    className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:shadow-none"
-                  >
-                    {currentIndex === questions.length - 1 ? 'Finish Quiz' : 'Next Question'}
-                  </button>
+                  
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={skipQuestion}
+                      className={cn(
+                        "px-6 py-2 rounded-xl font-semibold transition-colors",
+                        theme === 'light' ? "text-slate-500 hover:bg-slate-100" : "text-slate-400 hover:bg-slate-800"
+                      )}
+                    >
+                      Skip
+                    </button>
+                    <button
+                      onClick={nextQuestion}
+                      disabled={userAnswers[currentIndex] === null}
+                      className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:shadow-none"
+                    >
+                      {currentIndex === questions.length - 1 ? 'Finish Quiz' : 'Next Question'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </motion.div>
@@ -1480,6 +1907,21 @@ export default function App() {
                     Performance Report
                   </button>
                   <button
+                    onClick={downloadDpp}
+                    disabled={isDownloading}
+                    className={cn(
+                      "px-8 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg",
+                      theme === 'light' ? "bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50" : "bg-slate-800 text-indigo-400 border border-slate-700 hover:bg-slate-700"
+                    )}
+                  >
+                    {isDownloading ? (
+                      <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Download className="w-5 h-5" />
+                    )}
+                    Download DPP
+                  </button>
+                  <button
                     onClick={() => startQuiz(selectedSubject!)}
                     className="px-8 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                   >
@@ -1509,6 +1951,14 @@ export default function App() {
                             <div className="text-xs font-bold text-slate-400 uppercase">Question {idx + 1}</div>
                             <span className={cn(
                               "px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-wider",
+                              q.type === 'MATCH' ? 'bg-indigo-100 text-indigo-700' :
+                              q.type === 'STATEMENT' ? 'bg-amber-100 text-amber-700' :
+                              'bg-slate-100 text-slate-700'
+                            )}>
+                              {q.type}
+                            </span>
+                            <span className={cn(
+                              "px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold uppercase tracking-wider",
                               q.difficulty === 'Easy' ? 'bg-emerald-100 text-emerald-700' :
                               q.difficulty === 'Moderate' ? 'bg-amber-100 text-amber-700' :
                               'bg-rose-100 text-rose-700'
@@ -1525,6 +1975,44 @@ export default function App() {
                           <div className={cn("font-semibold", theme === 'light' ? "text-slate-900" : "text-slate-100")}>
                             <LatexMarkdown content={q.text} />
                           </div>
+
+                          {q.type === 'MATCH' && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-2">
+                              <div className={cn("p-3 rounded-xl border text-xs", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
+                                <div className="font-bold text-slate-400 uppercase mb-2">List I</div>
+                                <ul className="space-y-1">
+                                  {q.list1?.map((item, i) => (
+                                    <li key={i} className="flex gap-2">
+                                      <span className="font-bold text-indigo-600">({String.fromCharCode(65 + i)})</span>
+                                      <LatexMarkdown content={item} />
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <div className={cn("p-3 rounded-xl border text-xs", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
+                                <div className="font-bold text-slate-400 uppercase mb-2">List II</div>
+                                <ul className="space-y-1">
+                                  {q.list2?.map((item, i) => (
+                                    <li key={i} className="flex gap-2">
+                                      <span className="font-bold text-indigo-600">({['I', 'II', 'III', 'IV', 'V'][i]})</span>
+                                      <LatexMarkdown content={item} />
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+
+                          {q.diagramUrl && (
+                            <div className="flex justify-start py-2">
+                              <img 
+                                src={q.diagramUrl} 
+                                alt="Question Diagram" 
+                                className="max-w-[300px] h-auto rounded-xl border border-slate-100 shadow-sm"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          )}
                         </div>
                         {(() => {
                           const isCorrect = userAnswers[idx] !== null && String(userAnswers[idx]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
@@ -1583,14 +2071,44 @@ export default function App() {
                       )}
 
                       <div className={cn(
-                        "p-4 rounded-xl border",
+                        "p-4 rounded-xl border space-y-4",
                         theme === 'light' ? "bg-indigo-50/50 border-indigo-100" : "bg-indigo-900/20 border-indigo-900/50"
                       )}>
-                        <div className="flex items-center gap-2 mb-2 text-indigo-700 font-bold text-xs uppercase tracking-wider">
-                          <BookOpen className="w-4 h-4" /> Explanation
-                        </div>
-                        <div className={theme === 'light' ? "text-slate-700" : "text-slate-300"}>
-                          <LatexMarkdown content={q.explanation} />
+                        <div className={cn(
+                          "p-6 rounded-2xl border bg-dots",
+                          theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                        )}>
+                          <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-2 text-indigo-700 font-bold text-xs uppercase tracking-wider">
+                              <BookOpen className="w-4 h-4" /> Step-by-Step Explanation
+                            </div>
+                            <button
+                              onClick={() => handleSpeakExplanation(q.explanation, idx)}
+                              className={cn(
+                                "p-1.5 rounded-lg transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider",
+                                speakingIndex === idx 
+                                  ? "bg-indigo-600 text-white" 
+                                  : theme === 'light' ? "bg-indigo-100 text-indigo-600 hover:bg-indigo-200" : "bg-indigo-900/40 text-indigo-400 hover:bg-indigo-900/60"
+                              )}
+                            >
+                              <Volume2 className={cn("w-3.5 h-3.5", speakingIndex === idx && "animate-pulse")} />
+                              {speakingIndex === idx ? "Stop" : "Listen"}
+                            </button>
+                          </div>
+                          <div className={theme === 'light' ? "text-slate-700" : "text-slate-300"}>
+                            <LatexMarkdown content={q.explanation} />
+                          </div>
+                          
+                          {q.explanationDiagramUrl && (
+                            <div className="flex justify-center py-4 bg-white rounded-xl border border-indigo-100/50 mt-2">
+                              <img 
+                                src={q.explanationDiagramUrl} 
+                                alt="Explanation Diagram" 
+                                className="max-w-full h-auto rounded-lg"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1599,7 +2117,34 @@ export default function App() {
               </div>
             </motion.div>
           )}
+          {view === 'doubt' && (
+            <motion.div
+              key="doubt"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+            >
+              <DoubtSolver 
+                onBack={() => setView('home')}
+                theme={theme}
+                language={language}
+              />
+            </motion.div>
+          )}
         </AnimatePresence>
+        
+        {/* Hidden DPP Template for PDF Generation */}
+        <DppTemplate 
+          questions={questions}
+          subject={selectedSubject || 'General'}
+          topic={questions[0]?.topic || 'General'}
+          dppNumber="1.1"
+        />
+        <audio 
+          ref={audioRef} 
+          onEnded={() => setSpeakingIndex(null)} 
+          className="hidden"
+        />
       </main>
     </div>
   );

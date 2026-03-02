@@ -1,13 +1,12 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Download, ArrowLeft, FileText } from 'lucide-react';
 import { Question } from './types';
 import { cn } from './utils';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import Markdown from 'react-markdown';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import LatexMarkdown from './components/LatexMarkdown';
+import DppTemplate from './components/DppTemplate';
 
 interface DPPViewProps {
   questions: Question[];
@@ -16,141 +15,57 @@ interface DPPViewProps {
   theme: 'light' | 'dark';
 }
 
-const LatexMarkdown = ({ content }: { content: string }) => {
-  if (!content) return null;
-  return (
-    <span className="markdown-body max-w-none text-slate-900 inline-block align-top">
-      <Markdown 
-        remarkPlugins={[remarkMath]} 
-        rehypePlugins={[rehypeKatex]}
-      >
-        {content}
-      </Markdown>
-    </span>
-  );
-};
-
 export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, theme }) => {
   const dppRef = useRef<HTMLDivElement>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const downloadPDF = async () => {
-    if (!dppRef.current) return;
-    
-    const element = dppRef.current;
-    
-    // Create a toast or loading state if needed, but for now just proceed
-    const canvas = await html2canvas(element, {
-      scale: 3, // Increased scale for better quality
-      useCORS: true,
-      logging: false,
-      allowTaint: true,
-      backgroundColor: '#ffffff',
-      windowWidth: 800, // Fixed width for consistent layout
-      onclone: (clonedDoc) => {
-        const dpp = clonedDoc.getElementById('dpp-content');
-        if (dpp) {
-          // 1. Force styles for the capture
-          dpp.style.width = '800px';
-          dpp.style.margin = '0 auto';
-          dpp.style.padding = '60px'; // Increased padding for professional look
-          dpp.style.boxShadow = 'none';
-          dpp.style.border = 'none';
-          dpp.style.display = 'block';
-
-          const allElements = dpp.getElementsByTagName('*');
-          const elementsArray = Array.from(allElements);
-          
-          elementsArray.forEach((el) => {
-            const htmlEl = el as HTMLElement;
-            const style = window.getComputedStyle(htmlEl);
-            
-            // Fix text spacing issues that cause weird gaps
-            htmlEl.style.letterSpacing = 'normal';
-            htmlEl.style.wordSpacing = 'normal';
-            htmlEl.style.fontVariantLigatures = 'none';
-            htmlEl.style.textAlign = style.textAlign;
-
-            // Capture essential layout and typography styles
-            const propsToCapture = [
-              'color', 'backgroundColor', 'borderColor', 'borderTopColor', 'borderBottomColor', 
-              'fontSize', 'fontWeight', 'fontFamily', 'lineHeight', 'padding', 'margin',
-              'display', 'flexDirection', 'alignItems', 'justifyContent', 'gap',
-              'width', 'height', 'borderRadius', 'borderWidth', 'borderStyle'
-            ];
-            
-            propsToCapture.forEach(prop => {
-              const val = style.getPropertyValue(prop);
-              if (val && val !== 'rgba(0, 0, 0, 0)' && val !== 'transparent' && val !== 'none') {
-                // Special handling for oklch/oklab
-                if (val.includes('oklch') || val.includes('oklab')) {
-                  if (prop.includes('background')) htmlEl.style.setProperty(prop, '#ffffff', 'important');
-                  else if (prop.includes('border')) htmlEl.style.setProperty(prop, '#e2e8f0', 'important');
-                  else htmlEl.style.setProperty(prop, '#0f172a', 'important');
-                } else {
-                  htmlEl.style.setProperty(prop, val, 'important');
-                }
-              }
-            });
-          });
-
-          // 2. Remove problematic tags AFTER capturing styles
-          const styles = clonedDoc.getElementsByTagName('style');
-          const links = clonedDoc.getElementsByTagName('link');
-          for (let i = styles.length - 1; i >= 0; i--) styles[i].remove();
-          for (let i = links.length - 1; i >= 0; i--) {
-            if (links[i].rel === 'stylesheet') links[i].remove();
-          }
-        }
-      }
-    });
-    
-    const imgData = canvas.toDataURL('image/jpeg', 1.0);
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-    
-    const imgWidth = canvas.width;
-    const imgHeight = canvas.height;
-    
-    // Calculate how many pages we need
-    const ratio = pdfWidth / (imgWidth / 3); // /3 because scale was 3
-    const canvasPageHeight = (pdfHeight / ratio) * 3;
-    
-    let heightLeft = imgHeight;
-    let position = 0;
-    let page = 1;
-
-    while (heightLeft > 0) {
-      // Create a temporary canvas for each page to avoid blurry text at page breaks
-      const pageCanvas = document.createElement('canvas');
-      pageCanvas.width = imgWidth;
-      pageCanvas.height = Math.min(canvasPageHeight, heightLeft);
-      
-      const ctx = pageCanvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(
-          canvas,
-          0, position, imgWidth, pageCanvas.height,
-          0, 0, imgWidth, pageCanvas.height
-        );
-        
-        const pageData = pageCanvas.toDataURL('image/jpeg', 1.0);
-        
-        if (page > 1) pdf.addPage();
-        
-        const pWidth = pdfWidth;
-        const pHeight = (pageCanvas.height / 3) * ratio;
-        
-        pdf.addImage(pageData, 'JPEG', 0, 0, pWidth, pHeight);
-      }
-      
-      position += pageCanvas.height;
-      heightLeft -= pageCanvas.height;
-      page++;
+    setIsDownloading(true);
+    const element = document.getElementById('dpp-template');
+    if (!element) {
+      setIsDownloading(false);
+      return;
     }
+
+    // Temporarily show the element for capture
+    element.style.display = 'block';
     
-    pdf.save(`DPP_1_${subject.replace(/\s+/g, '_')}.pdf`);
+    try {
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: 1000
+      });
+      
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      
+      const imgWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(`DPP_${subject.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      element.style.display = 'none';
+      setIsDownloading(false);
+    }
   };
 
   // Group questions into sections
@@ -172,9 +87,14 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
         <div className="flex gap-3">
           <button 
             onClick={downloadPDF}
-            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+            disabled={isDownloading}
+            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
           >
-            <Download className="w-4 h-4" />
+            {isDownloading ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
             Download PDF
           </button>
         </div>
@@ -433,6 +353,14 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
           </div>
         </div>
       </div>
+
+      {/* Hidden DPP Template for PDF Generation */}
+      <DppTemplate 
+        questions={questions}
+        subject={subject}
+        topic={questions[0]?.topic || 'General'}
+        dppNumber="1.1"
+      />
 
       <style dangerouslySetInnerHTML={{ __html: `
         #dpp-content {

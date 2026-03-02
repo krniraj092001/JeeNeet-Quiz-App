@@ -1,5 +1,5 @@
 {
-  "name": "Masterbate with Jonybhai",
+  "name": "Master with Jonybhai",
   "description": "A comprehensive quiz platform for JEE and NEET aspirants, featuring JonyBhai-powered question generation and detailed explanations.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["camera"]
 }
