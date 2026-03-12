@@ -2,6 +2,7 @@ import { Type } from "@google/genai";
 
 export type Language = 'English' | 'Hindi';
 export type ExamType = 'NEET' | 'JEE' | 'Combined' | 'JEE_BOOKS' | 'NEET_BOOKS' | 'MS_CHOUHAN' | 'BLACK_BOOK' | 'NARENDRA_AVASTHI' | 'DPP' | 'JEE_MAIN_MOCK' | 'NEET_MOCK';
+export type QuizMode = 'fast' | 'thinking' | 'standard';
 
 export interface Question {
   id: string;

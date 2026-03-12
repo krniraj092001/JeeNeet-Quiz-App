@@ -161,15 +161,15 @@
 }
 
 .markdown-body {
-  @apply text-sm leading-relaxed;
+  @apply leading-relaxed;
 }
 
 .markdown-body h3 {
-  @apply font-serif italic text-lg text-slate-800 mt-6 mb-1;
+  @apply font-bold text-lg text-slate-800 mt-6 mb-1;
 }
 
 .markdown-body hr {
-  @apply border-slate-900 border-t-2 mb-4 mt-0;
+  @apply border-slate-200 border-t mb-4 mt-4;
 }
 
 .markdown-body p {
@@ -181,12 +181,13 @@
 }
 
 .katex {
-  font-size: 1.1em;
+  font-size: 1.15em;
   color: inherit;
 }
 
 .katex-display {
-  margin: 1em 0;
+  margin: 1.5em 0;
+  padding: 0.5em 0;
   overflow-x: auto;
   overflow-y: hidden;
 }

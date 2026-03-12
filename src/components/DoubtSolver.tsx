@@ -112,20 +112,35 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Camera API not supported in this browser.");
       }
+
+      // Check if any video devices exist first
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasVideoDevice = devices.some(device => device.kind === 'videoinput');
+      
+      if (!hasVideoDevice) {
+        throw new Error("No camera device found on this system.");
+      }
       
       let mediaStream: MediaStream;
       try {
-        // Try environment camera first
+        // Try environment camera first with ideal constraint
         mediaStream = await navigator.mediaDevices.getUserMedia({ 
           video: { facingMode: { ideal: 'environment' } },
           audio: false 
         });
       } catch (e) {
-        console.warn("Environment camera not found, trying any camera...");
-        mediaStream = await navigator.mediaDevices.getUserMedia({ 
-          video: true,
-          audio: false 
-        });
+        console.warn("Environment camera failed, trying simple video constraint...");
+        try {
+          // Try any video device
+          mediaStream = await navigator.mediaDevices.getUserMedia({ 
+            video: true,
+            audio: false 
+          });
+        } catch (e2) {
+          console.warn("Simple video constraint failed, trying minimal constraints...");
+          // Last resort: minimal constraints
+          mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
       }
       
       setStream(mediaStream);
@@ -143,24 +158,30 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
         const settings = track.getSettings?.() || {};
         
         // Some browsers might have it in settings or capabilities
+        // Also show for mobile devices as they usually have flash even if capabilities aren't reported correctly
         // @ts-ignore
-        const canTorch = !!capabilities.torch || 'torch' in settings;
+        const canTorch = !!capabilities.torch || 'torch' in settings || (!!track.applyConstraints && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
         setHasFlash(canTorch);
       }
     } catch (err: any) {
       console.error("Error accessing camera:", err);
       let msg = "Could not access camera.";
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      
+      const errorName = err.name || '';
+      const errorMessage = err.message || '';
+
+      if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
         msg = "Camera permission denied. Please enable camera access in your browser settings to take photos.";
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError' || err.message?.toLowerCase().includes('device not found')) {
-        msg = "No camera found on this device.";
-      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-        msg = "Camera is already in use by another application.";
-      } else if (err.message?.includes('Camera API not supported')) {
+      } else if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError' || errorMessage.toLowerCase().includes('device not found') || errorMessage.toLowerCase().includes('notfounderror')) {
+        msg = "No camera found or the requested camera device is not available. Please ensure your camera is connected and not in use by another app.";
+      } else if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
+        msg = "Camera is already in use by another application or a hardware error occurred.";
+      } else if (errorMessage.includes('Camera API not supported')) {
         msg = "Camera API is not supported in this browser or requires a secure (HTTPS) connection.";
       }
+      
       setCameraError(msg);
-      // Fallback to native camera input
+      // Fallback to native camera input (file picker with capture attribute)
       cameraInputRef.current?.click();
       
       // Clear error after 5 seconds
@@ -428,11 +449,12 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
                     <button 
                       onClick={toggleFlash}
                       className={cn(
-                        "p-3 rounded-full backdrop-blur-md transition-all",
-                        isFlashOn ? "bg-amber-500 text-white" : "bg-black/40 text-white hover:bg-black/60"
+                        "p-3 rounded-full backdrop-blur-md transition-all flex items-center gap-2",
+                        isFlashOn ? "bg-amber-500 text-white shadow-lg shadow-amber-500/40" : "bg-black/40 text-white hover:bg-black/60"
                       )}
                     >
-                      {isFlashOn ? <Zap className="w-6 h-6" /> : <ZapOff className="w-6 h-6" />}
+                      {isFlashOn ? <Zap className="w-6 h-6 fill-current" /> : <ZapOff className="w-6 h-6" />}
+                      <span className="text-xs font-bold uppercase tracking-wider pr-1">Flash {isFlashOn ? 'On' : 'Off'}</span>
                     </button>
                   )}
                 </div>
@@ -556,7 +578,7 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
                 </div>
               </div>
               <div className="text-center">
-                <h3 className={cn("text-lg font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>JonyBhai is thinking...</h3>
+                <h3 className={cn("text-lg font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>NITian is thinking...</h3>
                 <p className="text-slate-500 text-sm">Analyzing your question and preparing a detailed solution.</p>
               </div>
             </motion.div>
@@ -644,7 +666,7 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
                     <div className="flex items-center gap-2 text-indigo-700 font-bold text-xs uppercase tracking-wider mb-6">
                       <BookOpen className="w-4 h-4" /> Step-by-Step Explanation
                     </div>
-                    <div className={cn("leading-relaxed", theme === 'light' ? "text-slate-700" : "text-slate-300")}>
+                    <div className={cn("leading-relaxed text-base", theme === 'light' ? "text-slate-700" : "text-slate-300")}>
                       <LatexMarkdown content={response.explanation} theme={theme} />
                     </div>
                   </div>

@@ -9,14 +9,16 @@ interface LatexMarkdownProps {
   content: string;
   theme?: 'light' | 'dark';
   className?: string;
+  large?: boolean;
 }
 
-const LatexMarkdown = ({ content, theme = 'light', className }: LatexMarkdownProps) => {
+const LatexMarkdown = ({ content, theme = 'light', className, large = false }: LatexMarkdownProps) => {
   if (!content) return null;
   return (
     <div className={cn(
-      "markdown-body max-w-none",
+      "markdown-body max-w-none py-1",
       theme === 'light' ? "text-slate-900" : "text-slate-100",
+      large ? "text-xl md:text-2xl font-semibold" : "",
       className
     )}>
       <Markdown 

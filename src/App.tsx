@@ -45,6 +45,7 @@ import html2canvas from 'html2canvas';
 import DppTemplate from './components/DppTemplate';
 import LatexMarkdown from './components/LatexMarkdown';
 import DoubtSolver from './components/DoubtSolver';
+import LatexConverter from './components/LatexConverter';
 import { generateSpeech } from './services/geminiService';
 import { 
   BarChart, 
@@ -64,7 +65,7 @@ import {
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Question, Language, ExamType } from './types';
+import { Question, Language, ExamType, QuizMode } from './types';
 import { generateQuestions, chatDuringLoading } from './services/geminiService';
 import { cn } from './utils';
 import { DPPView } from './DPPView';
@@ -147,7 +148,7 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
 
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp' | 'doubt'>('home');
+  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp' | 'doubt' | 'latex'>('home');
   const [language, setLanguage] = useState<Language>('English');
   const [examType, setExamType] = useState<ExamType>('NEET');
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -164,6 +165,25 @@ export default function App() {
   const [lastQuestionStartTime, setLastQuestionStartTime] = useState<number>(0);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
   const [difficulty, setDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+  const [quizMode, setQuizMode] = useState<QuizMode>('standard');
+  
+  // Custom Quiz Builder State (Decoupled)
+  const [customSubject, setCustomSubject] = useState("");
+  const [customExamType, setCustomExamType] = useState<ExamType>('NEET');
+  const [customQuestionCount, setCustomQuestionCount] = useState(15);
+  const [customDifficulty, setCustomDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+  const [customLanguage, setCustomLanguage] = useState<Language>('English');
+  const [customQuizMode, setCustomQuizMode] = useState<QuizMode>('standard');
+  const [lastQuizParams, setLastQuizParams] = useState<{
+    subject: string,
+    examType: ExamType,
+    count: number,
+    difficulty: 'EASY' | 'MEDIUM' | 'HARD',
+    language: Language,
+    mode: QuizMode,
+    files?: { data: string, mimeType: string }[]
+  } | null>(null);
+
   const [loadingChatMessages, setLoadingChatMessages] = useState<{role: 'user' | 'assistant', content: string}[]>([]);
   const [loadingChatInput, setLoadingChatInput] = useState("");
   const [isLoadingChatReplying, setIsLoadingChatReplying] = useState(false);
@@ -326,7 +346,15 @@ export default function App() {
     setView('quiz');
   };
 
-  const startQuiz = async (subject: string, overrideExamType?: ExamType) => {
+  const startQuiz = async (
+    subject: string, 
+    overrideExamType?: ExamType, 
+    overrideCount?: number, 
+    overrideDifficulty?: 'EASY' | 'MEDIUM' | 'HARD',
+    overrideLanguage?: Language,
+    files?: { data: string, mimeType: string }[],
+    overrideMode?: QuizMode
+  ) => {
     setLoading(true);
     setSelectedSubject(subject);
     try {
@@ -335,11 +363,25 @@ export default function App() {
       
       let displaySubject = subject;
       let currentExamType = overrideExamType || examType;
-      let currentCount = questionCount;
+      let currentCount = overrideCount || questionCount;
+      let currentDifficulty = overrideDifficulty || difficulty;
+      let currentLanguage = overrideLanguage || language;
+      let currentMode = overrideMode || quizMode;
+      let currentFiles = files || (uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined);
+
+      setLastQuizParams({
+        subject: displaySubject,
+        examType: currentExamType,
+        count: currentCount,
+        difficulty: currentDifficulty,
+        language: currentLanguage,
+        mode: currentMode,
+        files: currentFiles
+      });
 
       let qs: Question[] = [];
       
-      if (subject === 'JEE Main Mock' || examType === 'JEE_MAIN_MOCK') {
+      if (subject === 'JEE Main Mock' || currentExamType === 'JEE_MAIN_MOCK') {
         // Sequential generation for JEE Mock subjects to respect rate limits
         const subjects = ['Physics', 'Chemistry', 'Mathematics'];
         const countPerSubject = Math.floor(currentCount / 3);
@@ -349,13 +391,13 @@ export default function App() {
           const sub = subjects[i];
           const subCount = countPerSubject + (i < remainder ? 1 : 0);
           if (subCount > 0) {
-            const subjectQs = await generateQuestions(sub, language, 'JEE_MAIN_MOCK', subCount, undefined);
+            const subjectQs = await generateQuestions(sub, currentLanguage, 'JEE_MAIN_MOCK', subCount, undefined, undefined, currentMode);
             qs.push(...subjectQs);
             // Increased gap between subjects to respect 15 RPM
             if (i < subjects.length - 1) await new Promise(resolve => setTimeout(resolve, 5000));
           }
         }
-      } else if (subject === 'NEET 2026 Mock' || examType === 'NEET_MOCK') {
+      } else if (subject === 'NEET 2026 Mock' || currentExamType === 'NEET_MOCK') {
         // Sequential generation for NEET Mock subjects to respect rate limits
         const subjectConfigs = [
           { name: 'Physics' },
@@ -370,24 +412,25 @@ export default function App() {
           const config = subjectConfigs[i];
           const subCount = countPerSubject + (i < remainder ? 1 : 0);
           if (subCount > 0) {
-            const subjectQs = await generateQuestions(config.name, language, 'NEET_MOCK', subCount, undefined);
+            const subjectQs = await generateQuestions(config.name, currentLanguage, 'NEET_MOCK', subCount, undefined, undefined, currentMode);
             qs.push(...subjectQs);
             // Increased gap between subjects to respect 15 RPM
             if (i < subjectConfigs.length - 1) await new Promise(resolve => setTimeout(resolve, 5000));
           }
         }
       } else {
-        if (examType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
-        if (examType === 'BLACK_BOOK') displaySubject = 'Mathematics';
-        if (examType === 'NARENDRA_AVASTHI') displaySubject = 'Physical Chemistry';
+        if (currentExamType === 'MS_CHOUHAN') displaySubject = 'Organic Chemistry';
+        if (currentExamType === 'BLACK_BOOK') displaySubject = 'Mathematics';
+        if (currentExamType === 'NARENDRA_AVASTHI') displaySubject = 'Physical Chemistry';
         
         qs = await generateQuestions(
           displaySubject, 
-          language,
+          currentLanguage,
           currentExamType,
           currentCount, 
-          uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined,
-          difficulty
+          currentFiles,
+          currentDifficulty,
+          currentMode
         );
       }
       
@@ -416,13 +459,13 @@ export default function App() {
       let errorMessage = "Failed to load questions. ";
       
       if (error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error")) {
-        errorMessage += "The JonyBhai service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
+        errorMessage += "The NITian service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
       } else if (error?.status === "RESOURCE_EXHAUSTED" || error?.message?.includes("429") || error?.message?.includes("quota")) {
         errorMessage = "API Rate Limit Exceeded. You've made too many requests in a short time. Please wait about 60 seconds and try again.";
       } else if (error?.message?.includes("exceeds the supported page limit of 1000")) {
         errorMessage = "The uploaded document is too large. Gemini API supports a maximum of 1000 pages per document. Please upload a smaller file or split your PDF.";
       } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
-        errorMessage += "The JonyBhai service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
+        errorMessage += "The NITian service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
       } else {
         const isMissingKey = error?.message?.includes("API_KEY_MISSING") || error?.message?.includes("API key") || !process.env.GEMINI_API_KEY;
         if (isMissingKey) {
@@ -531,11 +574,9 @@ export default function App() {
   };
 
   const CHAT_SUGGESTIONS = [
-    "How to increase sex power",
-    "How to make girlfriend",
-    "Give the name of the best sex position",
-    "How to increase body count",
-    "How to make body"
+    "How to improve my organic chemistry for JEE and NEET",
+    "How to improve my MATH for JEE",
+    "How to improve my physics for JEE and NEET"
   ];
 
   if (loading) {
@@ -566,8 +607,8 @@ export default function App() {
             <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
               <MessageSquare className="w-4 h-4 text-indigo-600" />
             </div>
-            <div>
-              <h3 className="font-bold text-sm">Jonybhai Assistant</h3>
+            <div className="flex-1">
+              <h3 className="font-bold text-sm">NITian Assistant</h3>
               <p className="text-[10px] text-slate-500">Online • Waiting for quiz generation</p>
             </div>
           </div>
@@ -683,11 +724,11 @@ export default function App() {
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={resetQuiz}>
             <GraduationCap className={cn("w-8 h-8", theme === 'light' ? "text-indigo-600" : "text-indigo-400")} />
-            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Master with Jonybhai</span>
+            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Master with NITian</span>
           </div>
           <div className="flex items-center gap-4">
             <span className={cn("text-sm font-bold hidden md:block", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
-              Jonybhai(Niraj YADAV)
+              NITian(Niraj YADAV)
             </span>
             <button
               onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
@@ -699,6 +740,15 @@ export default function App() {
             >
               {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
             </button>
+            <a
+              href="https://razorpay.me/@nitianvisionpointbynirajkumar"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+            >
+              <Zap className="w-4 h-4" />
+              <span className="hidden sm:inline">Upgrade</span>
+            </a>
             {view === 'quiz' && (
               <div className={cn(
                 "flex items-center gap-1.5 font-mono text-sm px-3 py-1 rounded-full transition-all",
@@ -729,7 +779,7 @@ export default function App() {
                   "text-4xl md:text-5xl font-bold tracking-tight",
                   theme === 'light' ? "text-slate-900" : "text-white"
                 )}>
-                  Master your exams with <span className="text-indigo-600">Jonybhai</span>
+                  Master your exams with <span className="text-indigo-600">NITian</span>
                 </h1>
                 <p className={cn(
                   "text-lg max-w-2xl mx-auto",
@@ -757,8 +807,8 @@ export default function App() {
                       <input 
                         type="text"
                         placeholder="e.g. Thermodynamics, Indian History..."
-                        value={selectedSubject || ''}
-                        onChange={(e) => setSelectedSubject(e.target.value)}
+                        value={customSubject}
+                        onChange={(e) => setCustomSubject(e.target.value)}
                         className={cn(
                           "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm",
                           theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
@@ -770,8 +820,8 @@ export default function App() {
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Exam Type</label>
                         <select
-                          value={examType}
-                          onChange={(e) => setExamType(e.target.value as ExamType)}
+                          value={customExamType}
+                          onChange={(e) => setCustomExamType(e.target.value as ExamType)}
                           className={cn(
                             "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm appearance-none bg-transparent",
                             theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
@@ -788,10 +838,10 @@ export default function App() {
                           type="number"
                           min="1"
                           max="25"
-                          value={questionCount}
+                          value={customQuestionCount}
                           onChange={(e) => {
                             const val = parseInt(e.target.value);
-                            if (!isNaN(val)) setQuestionCount(Math.min(25, Math.max(1, val)));
+                            if (!isNaN(val)) setCustomQuestionCount(Math.min(25, Math.max(1, val)));
                           }}
                           className={cn(
                             "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm",
@@ -810,10 +860,10 @@ export default function App() {
                         {['EASY', 'MEDIUM', 'HARD'].map(diff => (
                           <button
                             key={diff}
-                            onClick={() => setDifficulty(diff as any)}
+                            onClick={() => setCustomDifficulty(diff as any)}
                             className={cn(
                               "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
-                              difficulty === diff 
+                              customDifficulty === diff 
                                 ? "bg-indigo-600 text-white shadow-sm" 
                                 : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
                             )}
@@ -833,10 +883,10 @@ export default function App() {
                         {LANGUAGES.map(lang => (
                           <button
                             key={lang.id}
-                            onClick={() => setLanguage(lang.id)}
+                            onClick={() => setCustomLanguage(lang.id)}
                             className={cn(
                               "flex-1 py-2 text-xs font-bold rounded-lg transition-all uppercase",
-                              language === lang.id 
+                              customLanguage === lang.id 
                                 ? "bg-indigo-600 text-white shadow-sm" 
                                 : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
                             )}
@@ -846,11 +896,38 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AI Intelligence Mode</label>
+                      <div className={cn(
+                        "flex rounded-xl border overflow-hidden p-1 gap-1",
+                        theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
+                      )}>
+                        {[
+                          { id: 'fast', label: 'Fast', icon: Zap },
+                          { id: 'standard', label: 'Standard', icon: BrainCircuit },
+                          { id: 'thinking', label: 'Thinking', icon: Sparkles }
+                        ].map(m => (
+                          <button
+                            key={m.id}
+                            onClick={() => setCustomQuizMode(m.id as QuizMode)}
+                            className={cn(
+                              "flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex flex-col items-center gap-1",
+                              customQuizMode === m.id 
+                                ? "bg-indigo-600 text-white shadow-sm" 
+                                : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
+                            )}
+                          >
+                            <m.icon className="w-3 h-3" />
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
                   <button
-                    onClick={() => startQuiz(selectedSubject || 'General')}
-                    disabled={!selectedSubject}
+                    onClick={() => startQuiz(customSubject || 'General', customExamType, customQuestionCount, customDifficulty, customLanguage, [], customQuizMode)}
+                    disabled={!customSubject}
                     className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:shadow-none mt-auto"
                   >
                     <PlayCircle className="w-5 h-5" />
@@ -881,6 +958,29 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* LaTeX Converter Card */}
+                <div className={cn(
+                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors bg-gradient-to-br from-emerald-600 to-teal-700 text-white border-transparent",
+                )}>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold flex items-center gap-2 text-white">
+                      <Calculator className="w-5 h-5 text-white" />
+                      LaTeX to Output
+                    </h3>
+                    <span className="px-2 py-0.5 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest">Tool</span>
+                  </div>
+                  <p className="text-sm text-emerald-100 leading-relaxed">
+                    Convert complex LaTeX expressions into clear, readable mathematical output instantly. Perfect for checking formulas.
+                  </p>
+                  <button
+                    onClick={() => setView('latex')}
+                    className="w-full py-3 bg-white text-emerald-600 rounded-xl font-bold hover:bg-emerald-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
+                  >
+                    <Calculator className="w-4 h-4" />
+                    Convert LaTeX
+                  </button>
+                </div>
+
                 {/* Language Selection */}
                 <div className={cn(
                   "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
@@ -907,7 +1007,7 @@ export default function App() {
                     ))}
                   </div>
                   <div className="pt-2 border-t border-slate-100/50">
-                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Jonybhai</span>
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">NITian</span>
                   </div>
                 </div>
 
@@ -1075,11 +1175,39 @@ export default function App() {
                           <span>25</span>
                         </div>
                       </div>
+
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AI Intelligence Mode</label>
+                        <div className={cn(
+                          "flex rounded-xl border overflow-hidden p-1 gap-1",
+                          theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
+                        )}>
+                          {[
+                            { id: 'fast', label: 'Fast', icon: Zap },
+                            { id: 'standard', label: 'Standard', icon: BrainCircuit },
+                            { id: 'thinking', label: 'Thinking', icon: Sparkles }
+                          ].map(m => (
+                            <button
+                              key={m.id}
+                              onClick={() => setQuizMode(m.id as QuizMode)}
+                              className={cn(
+                                "flex-1 py-1.5 text-[9px] font-bold rounded-lg transition-all flex flex-col items-center gap-1",
+                                quizMode === m.id 
+                                  ? "bg-indigo-600 text-white shadow-sm" 
+                                  : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
+                              )}
+                            >
+                              <m.icon className="w-3 h-3" />
+                              {m.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3 mt-4">
                       <button
-                        onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'))}
+                        onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'), examType, questionCount, difficulty, language, uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined)}
                         disabled={uploadedFiles.length === 0 && !selectedSubject}
                         className={cn(
                           "py-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
@@ -1095,7 +1223,7 @@ export default function App() {
                       </button>
 
                       <button
-                        onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'), 'DPP')}
+                        onClick={() => startQuiz(uploadedFiles.length > 0 ? 'Uploaded Material' : (selectedSubject || 'General'), 'DPP', questionCount, difficulty, language, uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined)}
                         disabled={uploadedFiles.length === 0 && !selectedSubject}
                         className={cn(
                           "py-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center gap-1 shadow-lg",
@@ -1187,12 +1315,12 @@ export default function App() {
                   <div className="p-2 bg-indigo-100 rounded-lg">
                     <BrainCircuit className="w-6 h-6 text-indigo-600" />
                   </div>
-                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why Master with Jonybhai?</h2>
+                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why Master with NITian?</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   <div className="space-y-2">
                     <h4 className={cn("font-semibold", theme === 'light' ? "text-slate-800" : "text-slate-200")}>Dynamic Questions</h4>
-                    <p className={cn("text-sm", theme === 'light' ? "text-slate-600" : "text-slate-400")}>Never see the same question twice. JonyBhai generates fresh content every time.</p>
+                    <p className={cn("text-sm", theme === 'light' ? "text-slate-600" : "text-slate-400")}>Never see the same question twice. NITian generates fresh content every time.</p>
                   </div>
                   <div className="space-y-2">
                     <h4 className={cn("font-semibold", theme === 'light' ? "text-slate-800" : "text-slate-200")}>Detailed Solutions</h4>
@@ -1202,6 +1330,32 @@ export default function App() {
                     <h4 className={cn("font-semibold", theme === 'light' ? "text-slate-800" : "text-slate-200")}>Performance Tracking</h4>
                     <p className={cn("text-sm", theme === 'light' ? "text-slate-600" : "text-slate-400")}>Analyze your strengths and weaknesses across different subjects.</p>
                   </div>
+                </div>
+              </div>
+
+              <div className={cn(
+                "p-8 rounded-3xl border shadow-sm transition-colors mt-8 text-center",
+                theme === 'light' ? "bg-indigo-50 border-indigo-100" : "bg-indigo-900/20 border-indigo-900/30"
+              )}>
+                <div className="flex flex-col items-center gap-4">
+                  <div className="p-3 bg-indigo-100 rounded-full">
+                    <Zap className="w-8 h-8 text-indigo-600" />
+                  </div>
+                  <div className="space-y-2">
+                    <h2 className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Support NITian</h2>
+                    <p className={cn("text-sm max-w-md mx-auto", theme === 'light' ? "text-slate-600" : "text-slate-400")}>
+                      If you find this tool helpful, consider supporting the development. Your contributions help keep the service running and free for everyone!
+                    </p>
+                  </div>
+                  <a
+                    href="https://razorpay.me/@nitianvisionpointbynirajkumar"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center gap-2"
+                  >
+                    <Zap className="w-5 h-5" />
+                    Contribute Now
+                  </a>
                 </div>
               </div>
             </motion.div>
@@ -1337,7 +1491,7 @@ export default function App() {
                 theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
               )}>
                 <div className="space-y-4">
-                  <div className={cn("text-2xl font-semibold leading-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
+                  <div className={cn("leading-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <LatexMarkdown content={questions[currentIndex].text} />
                   </div>
 
@@ -1922,7 +2076,21 @@ export default function App() {
                     Download DPP
                   </button>
                   <button
-                    onClick={() => startQuiz(selectedSubject!)}
+                    onClick={() => {
+                      if (lastQuizParams) {
+                        startQuiz(
+                          lastQuizParams.subject, 
+                          lastQuizParams.examType, 
+                          lastQuizParams.count, 
+                          lastQuizParams.difficulty, 
+                          lastQuizParams.language, 
+                          lastQuizParams.files,
+                          lastQuizParams.mode
+                        );
+                      } else {
+                        startQuiz(selectedSubject!);
+                      }
+                    }}
                     className="px-8 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                   >
                     <RefreshCw className="w-5 h-5" />
@@ -1972,7 +2140,7 @@ export default function App() {
                               <Timer className="w-2.5 h-2.5" /> {questionTimes[idx]}s
                             </span>
                           </div>
-                          <div className={cn("font-semibold", theme === 'light' ? "text-slate-900" : "text-slate-100")}>
+                          <div className={cn("font-semibold text-lg", theme === 'light' ? "text-slate-900" : "text-slate-100")}>
                             <LatexMarkdown content={q.text} />
                           </div>
 
@@ -2095,7 +2263,7 @@ export default function App() {
                               {speakingIndex === idx ? "Stop" : "Listen"}
                             </button>
                           </div>
-                          <div className={theme === 'light' ? "text-slate-700" : "text-slate-300"}>
+                          <div className={cn("text-base leading-relaxed", theme === 'light' ? "text-slate-700" : "text-slate-300")}>
                             <LatexMarkdown content={q.explanation} />
                           </div>
                           
@@ -2128,6 +2296,19 @@ export default function App() {
                 onBack={() => setView('home')}
                 theme={theme}
                 language={language}
+              />
+            </motion.div>
+          )}
+          {view === 'latex' && (
+            <motion.div
+              key="latex"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+            >
+              <LatexConverter 
+                onBack={() => setView('home')}
+                theme={theme}
               />
             </motion.div>
           )}

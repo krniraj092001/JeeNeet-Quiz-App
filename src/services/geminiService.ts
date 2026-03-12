@@ -1,5 +1,5 @@
-import { GoogleGenAI, Modality } from "@google/genai";
-import { Question, QUIZ_SCHEMA, Language, ExamType, DoubtResponse } from "../types";
+import { GoogleGenAI, Modality, ThinkingLevel } from "@google/genai";
+import { Question, QUIZ_SCHEMA, Language, ExamType, DoubtResponse, QuizMode } from "../types";
 import { jsonrepair } from "jsonrepair";
 
 const getApiKey = () => {
@@ -15,7 +15,7 @@ const ai = new GoogleGenAI({ apiKey: getApiKey() });
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
-  maxRetries: number = 3,
+  maxRetries: number = 4,
   baseDelay: number = 1000
 ): Promise<T> {
   let lastError: any;
@@ -32,7 +32,11 @@ async function withRetry<T>(
       const isServerError = status === "INTERNAL" || msg.includes("500") || msg.includes("503");
 
       if (i < maxRetries && (isRpcError || isRateLimit || isServerError)) {
-        const delay = Math.pow(2, i) * (isRateLimit ? 5000 : baseDelay) + Math.random() * 1000;
+        // For rate limits, use a much longer delay (10s, 20s, 40s...)
+        const delay = isRateLimit 
+          ? Math.pow(2, i) * 10000 + Math.random() * 2000
+          : Math.pow(2, i) * baseDelay + Math.random() * 1000;
+          
         console.warn(`Retrying API call (${i + 1}/${maxRetries}) after ${Math.round(delay)}ms due to: ${msg}`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
@@ -143,7 +147,7 @@ async function generateDiagram(prompt: string): Promise<string | undefined> {
   
   try {
     const response = await withRetry(() => ai.models.generateContent({
-      model: 'gemini-3.1-flash-image-preview',
+      model: 'gemini-2.5-flash-image',
       contents: {
         parts: [
           {
@@ -190,7 +194,7 @@ async function generateDiagram(prompt: string): Promise<string | undefined> {
   return undefined;
 }
 
-const BATCH_SIZE = 25; // Increased batch size for faster generation
+const BATCH_SIZE = 10; // Reduced batch size for better reliability and to avoid truncation
 
 async function generateBatch(
   subject: string, 
@@ -199,6 +203,7 @@ async function generateBatch(
   count: number, 
   filesData?: { data: string, mimeType: string }[],
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD',
+  mode: QuizMode = 'standard',
   retryCount: number = 0
 ): Promise<Question[]> {
   let prompt = `Generate EXACTLY ${count} high-quality multiple choice questions for ${subject} in ${language} language. 
@@ -250,14 +255,13 @@ async function generateBatch(
   - BIOLOGY: NCERT-based but highly conceptual.` : ''}
   
   IMPORTANT: 
-  1. Use LaTeX for ALL mathematical formulas, chemical equations, and technical symbols. 
-  2. CRITICAL: ALL LaTeX MUST be wrapped in dollar signs. Use single dollar signs for inline math (e.g., $E=mc^2$) and double dollar signs for block math (e.g., $$\\int x dx$$).
-  3. For chemical formulas, use proper LaTeX notation (e.g., $H_2O$, $SO_4^{2-}$, $C_6H_{12}O_6$). Never use plain text like "H2O" or "ch3".
-  4. Ensure the output is clean. Do not include raw LaTeX commands in the text unless they are wrapped in dollar signs for rendering.
-  5. CRITICAL JSON FORMATTING: You are returning JSON. All backslashes in LaTeX MUST be escaped with another backslash (e.g., write "\\\\frac" instead of "\\frac").
-  6. Include detailed step-by-step explanations in ${language}, using block LaTeX for derivations.
-  7. Categorize each question as either 'Class 11' or 'Class 12' based on the standard NCERT curriculum.
-  8. The difficulty should be ${difficulty ? difficulty : 'a mix of Easy, Moderate, and Hard (unless specified otherwise)'}.`;
+  1. Use simple, clear formatting for questions and explanations.
+  2. You may use LaTeX ($...$) ONLY for complex mathematical formulas or equations where plain text is insufficient.
+  3. For chemical formulas and simple variables, prefer plain text (e.g., H2O, x, y) unless LaTeX is necessary for clarity.
+  4. Avoid over-using LaTeX for every single number or unit.
+  5. Include detailed step-by-step explanations in ${language}.
+  6. Categorize each question as either 'Class 11' or 'Class 12' based on the standard NCERT curriculum.
+  7. The difficulty should be ${difficulty ? difficulty : 'a mix of Easy, Moderate, and Hard (unless specified otherwise)'}.`;
 
   if (filesData && filesData.length > 0) {
     prompt = `I have provided ${filesData.length} document(s). 
@@ -284,59 +288,83 @@ async function generateBatch(
       });
     }
 
-    const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview", // Changed to flash to avoid quota limits
-      contents: contents,
-      config: {
-        systemInstruction: `You are an expert exam paper setter and tutor. 
+    const generateCall = (model: string) => {
+      const config: any = {
+        systemInstruction: `You are a world-class educational content creator and expert tutor for JEE and NEET. 
+        Your goal is to provide professional, textbook-quality questions and solutions.
+        
         CRITICAL: You MUST return a valid JSON array of objects.
         
-        Follow these strict guidelines for every question and solution:
-        1. CLARITY & ANSWERABILITY: Every question must be unambiguous, answerable with given info, and have a clear, definite correct answer.
-        2. QUESTION TYPES: 
+        PROFESSIONALISM & STYLE:
+        1. CLARITY: Every question must be unambiguous and mathematically sound.
+        2. NO CONVERSATIONAL FILLER: Do not use phrases like "Here is a question" or "I hope this helps".
+        3. ACCURATE TERMINOLOGY: Use standard academic terminology.
+        4. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
+        5. CONSISTENT FORMATTING: Use bold headers for steps in explanations.
+        
+        QUESTION TYPES: 
            - MCQ: Standard 4-option question.
            - NUMERICAL: Integer or decimal answer.
-           - STATEMENT: Two statements (I and II) followed by 4 standard options (e.g., Both correct, Both incorrect, I correct II incorrect, etc.).
-           - MATCH: Two lists (List I and List II) that need to be matched. Provide 4 multiple choice options that are possible matching combinations (e.g., 'A-I, B-II, C-III, D-IV'). Set 'correctAnswer' to the index of the correct option (0-3).
-        3. NATURAL LANGUAGE: Avoid "Synthetic Signatures" like "Answer the following:" or "Consider this problem:". Write naturally.
-        4. NO PROOFS: Questions must not be proof-based.
-        5. NO LARGE CALCULATIONS: Avoid large number calculations that require a calculator.
-        6. EXPLANATION FORMAT: Every explanation MUST follow this exact structure:
+           - STATEMENT: Two statements (I and II) followed by 4 standard options.
+           - MATCH: Two lists (List I and List II) that need to be matched. Provide 4 multiple choice options that are possible matching combinations (e.g., 'A-I, B-II, C-III, D-IV').
+        
+        EXPLANATION FORMAT:
            - Start with a brief introductory sentence.
-           - Use numbered steps: "### Step 1: [Heading]" followed immediately by "---" on the next line.
-           - Keep the text inside each step extremely concise and to the point. Do NOT write long paragraphs.
-           - Add a blank line between the text and any block LaTeX equations for good spacing.
-           - End with the final answer in a block LaTeX box: "$$ \\boxed{[answer]} $$"
-           - Use LaTeX for all math, wrapped in $...$ or $$...$$.
-        8. GTFA (Ground Truth Final Answer): The 'correctAnswer' must be in its simplest form (Number, Interval, Equation, Boolean, Set, or Vector). No full sentences.
-        9. LATEX: Use proper LaTeX for all formulas, wrapped in $...$ or $$...$$. Escape backslashes for JSON (\\\\frac).
-        10. DIAGRAM PROMPT: ONLY provide a 'diagramPrompt' if the original source question explicitly includes a diagram or figure. CRITICAL: You MUST use Google Search to verify the accuracy of any diagram, graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it. Do NOT invent diagrams.
-        11. EXPLANATION DIAGRAM: You MAY provide an 'explanationDiagramPrompt' if a visual aid would help. CRITICAL: You MUST use Google Search to verify the accuracy of any graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it.
-        12. FORMAT: Return a valid JSON array. Never truncate.`,
+           - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
+           - Keep the text inside each step concise and clear.
+           - End with the final answer clearly stated.
+        
+        6. DIAGRAM PROMPT: ONLY provide a 'diagramPrompt' if the original source question explicitly includes a diagram or figure. CRITICAL: You MUST use Google Search to verify the accuracy of any diagram, graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it. Do NOT invent diagrams.
+        7. EXPLANATION DIAGRAM: You MAY provide an 'explanationDiagramPrompt' if a visual aid would help. CRITICAL: You MUST use Google Search to verify the accuracy of any graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it.
+        8. FORMAT: Return a valid JSON array. Never truncate.`,
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
         tools: [{ googleSearch: {} }], // Added search grounding for accuracy
         temperature: 0.2, 
-        maxOutputTokens: 16384, 
-      },
-    }));
+      };
 
-    let text = response.text?.trim() || "[]";
+      if (mode === 'thinking') {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+      }
+
+      return ai.models.generateContent({
+        model: model, 
+        contents: contents,
+        config: config,
+      });
+    };
+
+    let modelToUse = "gemini-3-flash-preview";
+    if (mode === 'thinking') {
+      modelToUse = "gemini-3.1-pro-preview";
+    } else if (mode === 'fast') {
+      modelToUse = "gemini-3.1-flash-lite-preview";
+    }
+
+    const response = await withRetry(() => generateCall(modelToUse));
+
+    let text = response.text?.trim();
     
-    try {
-      // If the response is wrapped in markdown code blocks, extract the content
-      if (text.includes("```")) {
-        const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (jsonMatch) {
-          text = jsonMatch[1].trim();
+    if (!text) {
+      // Check if there are candidates but no text (could be safety filtered or other issues)
+      if (response.candidates && response.candidates.length > 0) {
+        const candidate = response.candidates[0];
+        if (candidate.finishReason === 'SAFETY') {
+          throw new Error("The request was blocked by safety filters. Try a different topic.");
+        }
+        if (candidate.finishReason === 'MAX_TOKENS') {
+          throw new Error("The response was too long and got truncated. Try a smaller question count.");
         }
       }
-      
+      throw new Error("Empty response from NITian. Please try again.");
+    }
+    
+    try {
       // Find the first [ and last ] to isolate the array
       const firstBracket = text.indexOf('[');
       const lastBracket = text.lastIndexOf(']');
       
-      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket >= firstBracket) {
         text = text.substring(firstBracket, lastBracket + 1);
       }
 
@@ -356,7 +384,7 @@ async function generateBatch(
       }
 
       if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
-        throw new Error("Empty or invalid response from JonyBhai");
+        throw new Error("Empty or invalid response from NITian");
       }
 
       return rawQuestions.map((q: any) => ({
@@ -366,16 +394,16 @@ async function generateBatch(
         examType
       }));
     } catch (parseError: any) {
-      console.error("Failed to parse JonyBhai response as JSON:", parseError);
+      console.error("Failed to parse NITian response as JSON:", parseError);
       
       // Retry on parsing errors
       if (retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
-        return generateBatch(subject, language, examType, count, filesData, difficulty, retryCount + 1);
+        return generateBatch(subject, language, examType, count, filesData, difficulty, mode, retryCount + 1);
       }
       
-      throw new Error("The JonyBhai response was invalid after multiple attempts. Please try again.");
+      throw new Error("The NITian response was invalid after multiple attempts. Please try again.");
     }
   } catch (error: any) {
     console.error("Error generating batch:", error);
@@ -389,7 +417,8 @@ export async function generateQuestions(
   examType: ExamType,
   count: number = 15, 
   filesData?: { data: string, mimeType: string }[],
-  difficulty?: 'EASY' | 'MEDIUM' | 'HARD'
+  difficulty?: 'EASY' | 'MEDIUM' | 'HARD',
+  mode: QuizMode = 'standard'
 ): Promise<Question[]> {
   const allQuestions: Question[] = [];
   const numBatches = Math.ceil(count / BATCH_SIZE);
@@ -409,7 +438,7 @@ export async function generateQuestions(
     }
 
     try {
-      const batchQuestions = await generateBatch(subject, language, examType, currentBatchCount, filesData, difficulty);
+      const batchQuestions = await generateBatch(subject, language, examType, currentBatchCount, filesData, difficulty, mode);
       
       // Generate diagrams for questions and explanations
       const questionsWithDiagrams = await Promise.all(batchQuestions.map(async (q) => {
@@ -449,24 +478,21 @@ export async function solveDoubt(
     throw new Error("API_KEY_MISSING");
   }
 
-  const prompt = `You are an expert JEE and NEET tutor. Solve the following doubt in ${language}.
+  const prompt = `You are a world-class JEE and NEET tutor. Solve the following doubt with textbook-quality precision in ${language}.
   
   DOUBT:
   ${questionText}
   
   INSTRUCTIONS:
-  1. EXPLANATION FORMAT: Every explanation MUST follow this exact structure:
+  1. PROFESSIONALISM: Use clear, concise, and academic language. No conversational filler.
+  2. EXPLANATION FORMAT:
      - Start with a brief introductory sentence.
-     - Use numbered steps: "### Step 1: [Heading]" followed immediately by "---" on the next line.
-     - Keep the text inside each step extremely concise and to the point. Do NOT write long paragraphs.
-     - Add a blank line between the text and any block LaTeX equations for good spacing.
-     - End with the final answer in a block LaTeX box: "$$ \\boxed{[answer]} $$"
-     - Use LaTeX for all math, wrapped in $...$ or $$...$$.
-  2. Use LaTeX for all mathematical formulas, chemical equations, and symbols.
-  3. Wrap ALL LaTeX in dollar signs ($...$ for inline, $$...$$ for block).
-  4. If a diagram would help clarify the solution, provide a detailed 'diagramPrompt' to recreate it. CRITICAL: You MUST use Google Search to verify the accuracy of any graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it.
-  6. Identify the 'subject' and 'topic' of the question.
-  7. Return the response as a JSON object.`;
+     - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
+     - Keep the text inside each step concise and clear.
+     - End with the final answer clearly stated.
+  3. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
+  4. If a diagram would help, provide a detailed 'diagramPrompt'. Verify accuracy using Google Search.
+  5. Identify the 'subject' and 'topic' of the question.`;
 
   try {
     const contents: any = { parts: [{ text: prompt }] };
@@ -479,8 +505,8 @@ export async function solveDoubt(
       });
     }
 
-    const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview", // Changed to flash to avoid quota limits
+    const generateCall = (model: string) => ai.models.generateContent({
+      model: model,
       contents: contents,
       config: {
         responseMimeType: "application/json",
@@ -497,9 +523,22 @@ export async function solveDoubt(
         tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
         temperature: 0.2,
       },
-    }));
+    });
 
-    const result = JSON.parse(response.text || "{}");
+    const response = await withRetry(() => generateCall("gemini-3-flash-preview"));
+
+    const text = response.text?.trim();
+    if (!text) {
+      if (response.candidates && response.candidates.length > 0) {
+        const candidate = response.candidates[0];
+        if (candidate.finishReason === 'SAFETY') {
+          throw new Error("The request was blocked by safety filters.");
+        }
+      }
+      throw new Error("Empty response from NITian.");
+    }
+
+    const result = JSON.parse(text);
     
     // Extract grounding sources if available
     const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.map(chunk => ({
@@ -532,13 +571,26 @@ export async function chatDuringLoading(
     throw new Error("API_KEY_MISSING");
   }
 
-  const prompt = `You are a friendly, helpful AI assistant. The user is currently waiting for a quiz to be generated. Keep them engaged, answer their questions concisely, and maintain a positive tone.`;
+  const prompt = `You are NITian Assistant, a friendly, helpful AI assistant for JEE and NEET aspirants. 
+  The user is currently waiting for a quiz to be generated. 
+  
+  CRITICAL INSTRUCTIONS:
+  1. Always reply in a native Indian human language (Hinglish/Hindi mixed with English) that feels natural to a student.
+  2. If the user asks about improving Organic Chemistry, you MUST give this specific advice:
+     Step 1. Sabse Pahle aap ye ensure karo ki apka IUPAC Name or GOC accha ho.
+     Step 2. Yadi achha nhi hai, tab sabse pahle aapko IUPAC or GOC ko achha karna hai. Kyunki IUPAC or GOC organic chemistry ka jan hai.
+     Step 3. GOC ke bina reaction mechanism ko samajhna namunkin hai.
+     Step 4. Iske bad isomerism pe focus karo.
+     Step 5. Iske bad reaction mechanism ko samajhna asan ho jayega.
+     Step 6. Aapko organic chemistry ke Youtube pe achhe teacher free mil jayega for example M.S. Chauhan sir.
+  3. For Math and Physics, give similar structured, practical advice in the same native tone.
+  4. Keep them engaged and maintain a positive, motivating tone.`;
 
   try {
     const historyString = messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
     
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-flash-lite-preview",
       contents: `${prompt}\n\nConversation History:\n${historyString}\n\nAssistant:`,
     }));
 

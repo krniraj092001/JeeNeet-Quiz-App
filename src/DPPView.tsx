@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Download, ArrowLeft, FileText } from 'lucide-react';
+import { Download, ArrowLeft, FileText, Printer } from 'lucide-react';
 import { Question } from './types';
 import { cn } from './utils';
 import html2canvas from 'html2canvas';
@@ -28,18 +28,33 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
     }
 
     // Temporarily show the element for capture
+    const originalStyle = element.style.display;
+    const originalPosition = element.style.position;
+    const originalLeft = element.style.left;
+    
     element.style.display = 'block';
+    element.style.position = 'fixed';
+    element.style.left = '-9999px';
     
     try {
+      // Give it a moment to render any LaTeX
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 3, // Higher scale for better quality
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        windowWidth: 1000
+        windowWidth: 1000,
+        onclone: (clonedDoc) => {
+          const clonedElement = clonedDoc.getElementById('dpp-template');
+          if (clonedElement) {
+            clonedElement.style.display = 'block';
+          }
+        }
       });
       
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const imgData = canvas.toDataURL('image/png'); // PNG for better text clarity
       const pdf = new jsPDF('p', 'mm', 'a4');
       
       const imgWidth = 210; // A4 width in mm
@@ -48,13 +63,13 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
       let heightLeft = imgHeight;
       let position = 0;
 
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
       heightLeft -= pageHeight;
 
       while (heightLeft >= 0) {
         position = heightLeft - imgHeight;
         pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
         heightLeft -= pageHeight;
       }
 
@@ -63,9 +78,15 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF. Please try again.');
     } finally {
-      element.style.display = 'none';
+      element.style.display = originalStyle;
+      element.style.position = originalPosition;
+      element.style.left = originalLeft;
       setIsDownloading(false);
     }
+  };
+
+  const handlePrint = () => {
+    window.print();
   };
 
   // Group questions into sections
@@ -85,6 +106,13 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
           Back to Home
         </button>
         <div className="flex gap-3">
+          <button 
+            onClick={handlePrint}
+            className="flex items-center gap-2 px-6 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all border border-slate-200"
+          >
+            <Printer className="w-4 h-4" />
+            Print DPP
+          </button>
           <button 
             onClick={downloadPDF}
             disabled={isDownloading}
@@ -349,7 +377,7 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
               <span>support@nitianvisionpoint.com</span>
             </div>
             <div className="text-lg font-black text-indigo-600 tracking-tight" style={{ color: '#4f46e5' }}>#NITianVisionPoint</div>
-            <div className="text-[8px] text-slate-300 uppercase tracking-widest font-bold" style={{ color: '#cbd5e1' }}>Powered by JonyBhai AI Engine</div>
+            <div className="text-[8px] text-slate-300 uppercase tracking-widest font-bold" style={{ color: '#cbd5e1' }}>Powered by NITian AI Engine</div>
           </div>
         </div>
       </div>
