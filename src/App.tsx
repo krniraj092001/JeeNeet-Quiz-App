@@ -456,22 +456,27 @@ export default function App() {
       }
     } catch (error: any) {
       console.error("Quiz generation error:", error);
+      
+      const msg = (error?.message || error?.error?.message || (typeof error === 'string' ? error : "")).toLowerCase();
+      const status = error?.status || error?.error?.status || "";
+      const code = error?.code || error?.error?.code || "";
+      
       let errorMessage = "Failed to load questions. ";
       
-      if (error?.message?.includes("Rpc failed") || error?.message?.includes("xhr error")) {
+      if (msg.includes("rpc failed") || msg.includes("xhr error")) {
         errorMessage += "The NITian service is currently experiencing high latency. We've tried retrying, but the connection is still unstable. Please try again in a few moments.";
-      } else if (error?.status === "RESOURCE_EXHAUSTED" || error?.message?.includes("429") || error?.message?.includes("quota")) {
+      } else if (status === "RESOURCE_EXHAUSTED" || msg.includes("429") || msg.includes("quota") || String(code) === "429") {
         errorMessage = "API Rate Limit Exceeded. You've made too many requests in a short time. Please wait about 60 seconds and try again.";
-      } else if (error?.message?.includes("exceeds the supported page limit of 1000")) {
+      } else if (msg.includes("exceeds the supported page limit of 1000")) {
         errorMessage = "The uploaded document is too large. Gemini API supports a maximum of 1000 pages per document. Please upload a smaller file or split your PDF.";
-      } else if (error?.message?.includes("INTERNAL") || error?.status === "INTERNAL") {
+      } else if (msg.includes("internal") || status === "INTERNAL" || String(code) === "500") {
         errorMessage += "The NITian service encountered an internal error. This often happens if the request is too complex. Try selecting a specific subject or uploading a smaller file.";
       } else {
-        const isMissingKey = error?.message?.includes("API_KEY_MISSING") || error?.message?.includes("API key") || !process.env.GEMINI_API_KEY;
+        const isMissingKey = msg.includes("api_key_missing") || msg.includes("api key") || !process.env.GEMINI_API_KEY;
         if (isMissingKey) {
-          errorMessage = "CRITICAL: Gemini API Key is missing. \n\n1. Go to Vercel Settings > Environment Variables. \n2. Add GEMINI_API_KEY. \n3. IMPORTANT: Go to 'Deployments' and click 'Redeploy' on your latest deployment. The app will NOT work until you redeploy.";
+          errorMessage = "CRITICAL: Gemini API Key is missing. Please check your environment variables.";
         } else {
-          errorMessage += "Please ensure your internet connection is stable and try again. (Error: " + (error?.message || "Unknown") + ")";
+          errorMessage += "Please ensure your internet connection is stable and try again. (Error: " + (msg || status || "Unknown") + ")";
         }
       }
       
@@ -727,7 +732,10 @@ export default function App() {
             <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Master with NITian</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className={cn("text-sm font-bold hidden md:block", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+            <span 
+              className={cn("text-sm font-bold hidden md:block", theme === 'light' ? "text-slate-500" : "text-slate-400")}
+              style={{ borderColor: '#f1d6d6' }}
+            >
               NITian(Niraj YADAV)
             </span>
             <button
@@ -738,7 +746,29 @@ export default function App() {
               )}
               title={theme === 'light' ? "Switch to Dark Mode" : "Switch to Light Mode"}
             >
-              {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+              {theme === 'light' ? (
+                <Moon 
+                  className="w-[30px] h-[30px]" 
+                  style={{ 
+                    borderWidth: '0px', 
+                    backgroundColor: '#d7d7d7', 
+                    width: '30px', 
+                    height: '30px', 
+                    color: '#ee0808' 
+                  }} 
+                />
+              ) : (
+                <Sun 
+                  className="w-[30px] h-[30px]" 
+                  style={{ 
+                    borderWidth: '0px', 
+                    backgroundColor: '#d7d7d7', 
+                    width: '30px', 
+                    height: '30px', 
+                    color: '#ee0808' 
+                  }} 
+                />
+              )}
             </button>
             <a
               href="https://razorpay.me/@nitianvisionpointbynirajkumar"
@@ -792,10 +822,13 @@ export default function App() {
               {/* Selection Options */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Custom Quiz Builder Card */}
-                <div className={cn(
-                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 flex flex-col",
-                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-                )}>
+                <div 
+                  className={cn(
+                    "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 flex flex-col",
+                    theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                  )}
+                  style={{ borderColor: '#0469f4', borderWidth: '3px' }}
+                >
                   <h3 className={cn("font-bold flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <BookOpen className="w-5 h-5 text-indigo-600" />
                     <span className="italic font-serif">Custom Quiz Builder</span>
@@ -936,9 +969,12 @@ export default function App() {
                 </div>
 
                 {/* AI Doubt Solver Card */}
-                <div className={cn(
-                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 bg-gradient-to-br from-indigo-600 to-violet-700 text-white border-transparent",
-                )}>
+                <div 
+                  className={cn(
+                    "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 bg-gradient-to-br from-indigo-600 to-violet-700 text-white border-transparent",
+                  )}
+                  style={{ borderColor: '#f80a0a', borderWidth: '2px' }}
+                >
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold flex items-center gap-2 text-white">
                       <Sparkles className="w-5 h-5 text-white" />
@@ -959,9 +995,12 @@ export default function App() {
                 </div>
 
                 {/* LaTeX Converter Card */}
-                <div className={cn(
-                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors bg-gradient-to-br from-emerald-600 to-teal-700 text-white border-transparent",
-                )}>
+                <div 
+                  className={cn(
+                    "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors bg-gradient-to-br from-emerald-600 to-teal-700 text-white border-transparent",
+                  )}
+                  style={{ borderColor: '#0101dc', borderWidth: '3px' }}
+                >
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold flex items-center gap-2 text-white">
                       <Calculator className="w-5 h-5 text-white" />
@@ -982,10 +1021,13 @@ export default function App() {
                 </div>
 
                 {/* Language Selection */}
-                <div className={cn(
-                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
-                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-                )}>
+                <div 
+                  className={cn(
+                    "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
+                    theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                  )}
+                  style={{ borderColor: '#0b67ea', borderWidth: '3px' }}
+                >
                   <h3 className={cn("font-bold flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <BookOpen className="w-5 h-5 text-indigo-600" />
                     Select Medium
@@ -1012,10 +1054,13 @@ export default function App() {
                 </div>
 
                 {/* Exam Type Selection */}
-                <div className={cn(
-                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
-                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-                )}>
+                <div 
+                  className={cn(
+                    "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
+                    theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                  )}
+                  style={{ borderColor: '#e40000', borderWidth: '2px' }}
+                >
                   <h3 className={cn("font-bold flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <Trophy className="w-5 h-5 text-indigo-600" />
                     Select Exam Level
@@ -1057,10 +1102,13 @@ export default function App() {
                 </div>
 
                 {/* Theme Selection */}
-                <div className={cn(
-                  "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
-                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-                )}>
+                <div 
+                  className={cn(
+                    "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors",
+                    theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                  )}
+                  style={{ borderColor: '#0a62cd', borderWidth: '3px' }}
+                >
                   <h3 className={cn("font-bold flex items-center gap-2", theme === 'light' ? "text-slate-900" : "text-white")}>
                     <Sun className="w-5 h-5 text-indigo-600" />
                     Select Theme
@@ -1104,6 +1152,7 @@ export default function App() {
                       isDragging ? "border-indigo-600 bg-indigo-50" : (theme === 'light' ? "border-slate-200 hover:border-slate-300" : "border-slate-700 hover:border-slate-600"),
                       uploadedFiles.length > 0 && "border-emerald-500 bg-emerald-50/30"
                     )}
+                    style={{ borderWidth: '4px', borderColor: '#0d6def' }}
                     onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                     onDragLeave={() => setIsDragging(false)}
                     onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFileUpload(e); }}
@@ -1135,14 +1184,22 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className={cn(
-                    "w-full md:w-72 p-6 rounded-3xl border-2 flex flex-col justify-between",
-                    theme === 'light' ? "bg-white border-slate-100" : "bg-slate-900 border-slate-800"
-                  )}>
+                  <div 
+                    className={cn(
+                      "w-full md:w-72 p-6 rounded-3xl border-2 flex flex-col justify-between",
+                      theme === 'light' ? "bg-white border-slate-100" : "bg-slate-900 border-slate-800"
+                    )}
+                    style={{ borderColor: '#fe0808', borderWidth: '3px' }}
+                  >
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <div className="flex justify-between items-end">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Number of Questions</label>
+                          <label 
+                            className="text-[10px] font-bold text-slate-400 uppercase tracking-wider"
+                            style={{ fontSize: '10px', lineHeight: '18px', color: '#0151bc' }}
+                          >
+                            Number of Questions
+                          </label>
                           <div className="flex items-center gap-2">
                             <input 
                               type="number"
@@ -1218,7 +1275,7 @@ export default function App() {
                       >
                         <div className="flex items-center gap-2">
                           <PlayCircle className="w-5 h-5" />
-                          <span className="text-sm">Exam Quiz</span>
+                          <span className="text-sm" style={{ borderColor: '#1b64d3', color: '#0b66f1' }}>Exam Quiz</span>
                         </div>
                       </button>
 
@@ -1234,13 +1291,16 @@ export default function App() {
                       >
                         <div className="flex items-center gap-2">
                           <FileText className="w-5 h-5" />
-                          <span className="text-sm">Create DPP</span>
+                          <span className="text-sm" style={{ color: '#ef0c6d' }}>Create DPP</span>
                         </div>
                       </button>
                     </div>
 
-                    <div className="mt-2 text-center">
-                      <span className={cn("text-[10px] opacity-80 font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+                    <div className="mt-2 text-center" style={{ fontSize: '18px', color: '#0f52f1' }}>
+                      <span 
+                        className={cn("text-[10px] opacity-80 font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}
+                        style={{ color: '#ff0b0b', fontSize: '17px' }}
+                      >
                         {uploadedFiles.length > 0 
                           ? `From ${uploadedFiles.length} uploaded file(s)` 
                           : selectedSubject ? `For ${selectedSubject}` : "Select a subject or upload files"}
@@ -1275,42 +1335,49 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {SUBJECTS.map((subject) => (
-                  <motion.button
-                    key={subject.id}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setSelectedSubject(subject.id)}
-                    className={cn(
-                      "flex items-center p-6 rounded-2xl border-2 transition-all text-left group relative",
-                      selectedSubject === subject.id 
-                        ? (theme === 'light' ? "border-indigo-600 ring-2 ring-indigo-600/20" : "border-indigo-400 ring-2 ring-indigo-400/20")
-                        : (theme === 'light' ? cn(subject.bg, subject.border) : cn(subject.darkBg, subject.darkBorder)),
-                      "hover:shadow-lg hover:shadow-indigo-500/5"
-                    )}
-                  >
-                    <div className={cn("p-4 rounded-xl mr-4 shadow-sm", theme === 'light' ? "bg-white" : "bg-slate-800")}>
-                      <subject.icon className={cn("w-8 h-8", subject.color)} />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{subject.id}</h3>
-                      <p className={cn("text-sm", theme === 'light' ? "text-slate-500" : "text-slate-400")}>Select to practice</p>
-                    </div>
-                    {selectedSubject === subject.id ? (
-                      <div className="bg-indigo-600 text-white p-1 rounded-full">
-                        <PlayCircle className="w-5 h-5" />
+                {SUBJECTS.map((subject, index) => {
+                  const customBorders = ['#13c5d6', '#cca81a', '#cc9396', '#e4abeb', '#97a7f5', '#d25059'];
+                  return (
+                    <motion.button
+                      key={subject.id}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setSelectedSubject(subject.id)}
+                      className={cn(
+                        "flex items-center p-6 rounded-2xl border-2 transition-all text-left group relative",
+                        selectedSubject === subject.id 
+                          ? (theme === 'light' ? "border-indigo-600 ring-2 ring-indigo-600/20" : "border-indigo-400 ring-2 ring-indigo-400/20")
+                          : (theme === 'light' ? cn(subject.bg, subject.border) : cn(subject.darkBg, subject.darkBorder)),
+                        "hover:shadow-lg hover:shadow-indigo-500/5"
+                      )}
+                      style={{ borderColor: customBorders[index], borderWidth: '3px' }}
+                    >
+                      <div className={cn("p-4 rounded-xl mr-4 shadow-sm", theme === 'light' ? "bg-white" : "bg-slate-800")}>
+                        <subject.icon className={cn("w-8 h-8", subject.color)} />
                       </div>
-                    ) : (
-                      <ChevronRight className="w-6 h-6 text-slate-400 group-hover:text-slate-600 transition-colors" />
-                    )}
-                  </motion.button>
-                ))}
+                      <div className="flex-1">
+                        <h3 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{subject.id}</h3>
+                        <p className={cn("text-sm", theme === 'light' ? "text-slate-500" : "text-slate-400")}>Select to practice</p>
+                      </div>
+                      {selectedSubject === subject.id ? (
+                        <div className="bg-indigo-600 text-white p-1 rounded-full">
+                          <PlayCircle className="w-5 h-5" />
+                        </div>
+                      ) : (
+                        <ChevronRight className="w-6 h-6 text-slate-400 group-hover:text-slate-600 transition-colors" />
+                      )}
+                    </motion.button>
+                  );
+                })}
               </div>
 
-              <div className={cn(
-                "p-8 rounded-3xl border shadow-sm transition-colors",
-                theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-              )}>
+              <div 
+                className={cn(
+                  "p-8 rounded-3xl border shadow-sm transition-colors",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}
+                style={{ borderWidth: '3px', borderColor: '#0c70f5' }}
+              >
                 <div className="flex items-center gap-3 mb-4">
                   <div className="p-2 bg-indigo-100 rounded-lg">
                     <BrainCircuit className="w-6 h-6 text-indigo-600" />
@@ -1337,13 +1404,21 @@ export default function App() {
                 "p-8 rounded-3xl border shadow-sm transition-colors mt-8 text-center",
                 theme === 'light' ? "bg-indigo-50 border-indigo-100" : "bg-indigo-900/20 border-indigo-900/30"
               )}>
-                <div className="flex flex-col items-center gap-4">
+                <div className="flex flex-col items-center gap-4" style={{ borderColor: '#b52044', borderWidth: '1px' }}>
                   <div className="p-3 bg-indigo-100 rounded-full">
                     <Zap className="w-8 h-8 text-indigo-600" />
                   </div>
                   <div className="space-y-2">
-                    <h2 className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Support NITian</h2>
-                    <p className={cn("text-sm max-w-md mx-auto", theme === 'light' ? "text-slate-600" : "text-slate-400")}>
+                    <h2 
+                      className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}
+                      style={{ color: '#eb0f58' }}
+                    >
+                      Support NITian
+                    </h2>
+                    <p 
+                      className={cn("text-sm max-w-md mx-auto", theme === 'light' ? "text-slate-600" : "text-slate-400")}
+                      style={{ color: '#005bd9', fontSize: '14px' }}
+                    >
                       If you find this tool helpful, consider supporting the development. Your contributions help keep the service running and free for everyone!
                     </p>
                   </div>
@@ -1472,8 +1547,20 @@ export default function App() {
                   <ArrowLeft className="w-4 h-4" />
                   Exit Quiz
                 </button>
-                <div className="text-sm font-medium text-slate-500">
-                  Question {currentIndex + 1} of {questions.length}
+                
+                <div className="flex items-center gap-4">
+                  {timeLimit > 0 && (
+                    <div className={cn(
+                      "flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold font-mono",
+                      (timeLimit - timeElapsed) < 60 ? "bg-rose-100 text-rose-600 animate-pulse" : "bg-slate-100 text-slate-600"
+                    )}>
+                      <Timer className="w-3.5 h-3.5" />
+                      {formatTime(Math.max(0, timeLimit - timeElapsed))}
+                    </div>
+                  )}
+                  <div className="text-sm font-medium text-slate-500">
+                    Question {currentIndex + 1} of {questions.length}
+                  </div>
                 </div>
               </div>
 

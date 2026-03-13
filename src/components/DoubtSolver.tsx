@@ -318,6 +318,7 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
             "p-6 rounded-3xl border shadow-sm space-y-4",
             theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
           )}
+          style={{ borderWidth: '4px', borderColor: '#0d6def' }}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="relative">
@@ -618,7 +619,9 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
               <div className={cn(
                 "p-8 rounded-3xl border shadow-sm space-y-6",
                 theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-              )}>
+              )}
+              style={{ borderWidth: '3px', borderColor: '#fe0808' }}
+              >
                 <div className="flex items-center justify-between border-b pb-4 border-slate-100">
                   <div className="flex items-center gap-3">
                     <div className="p-2 bg-indigo-50 rounded-xl">

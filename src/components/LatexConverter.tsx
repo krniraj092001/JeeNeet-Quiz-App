@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, Copy, Check, Trash2, Maximize2, Minimize2 } from 'lucide-react';
+import { ArrowLeft, Copy, Check, Trash2, Maximize2, Minimize2, AlertCircle } from 'lucide-react';
+import katex from 'katex';
 import LatexMarkdown from './LatexMarkdown';
 import { cn } from '../utils';
 
@@ -13,6 +14,23 @@ export default function LatexConverter({ onBack, theme }: LatexConverterProps) {
   const [input, setInput] = useState('\\frac{2}{3}');
   const [copied, setCopied] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!input.trim()) {
+      setError(null);
+      return;
+    }
+    try {
+      // Use katex to validate the input
+      katex.renderToString(input, { throwOnError: true, displayMode: true });
+      setError(null);
+    } catch (err: any) {
+      // Extract a cleaner error message if possible
+      const msg = err.message || 'Invalid LaTeX syntax';
+      setError(msg.replace('KaTeX parse error: ', ''));
+    }
+  }, [input]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(input);
@@ -61,9 +79,12 @@ export default function LatexConverter({ onBack, theme }: LatexConverterProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Input Section */}
-        <div className="space-y-4">
+        <div className="space-y-4" style={{ borderWidth: '3px', borderColor: '#0101dc' }}>
           <div className="flex items-center justify-between">
-            <label className={cn("text-sm font-bold uppercase tracking-wider", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+            <label 
+              className={cn("text-sm font-bold uppercase tracking-wider", theme === 'light' ? "text-slate-500" : "text-slate-400")}
+              style={{ fontSize: '10px', lineHeight: '18px', color: '#0151bc' }}
+            >
               Input (LaTeX)
             </label>
             <div className="flex gap-2">
@@ -114,16 +135,31 @@ export default function LatexConverter({ onBack, theme }: LatexConverterProps) {
         </div>
 
         {/* Output Section */}
-        <div className="space-y-4">
-          <label className={cn("text-sm font-bold uppercase tracking-wider", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+        <div className="space-y-4" style={{ borderWidth: '3px', borderColor: '#0101dc' }}>
+          <label 
+            className={cn("text-sm font-bold uppercase tracking-wider", theme === 'light' ? "text-slate-500" : "text-slate-400")}
+            style={{ fontSize: '10px', lineHeight: '18px', color: '#005bd9' }}
+          >
             Output (Rendered)
           </label>
           <div className={cn(
-            "w-full h-[400px] p-8 rounded-3xl border-2 flex items-center justify-center overflow-auto bg-dots",
+            "w-full h-[400px] p-8 rounded-3xl border-2 flex flex-col items-center justify-center overflow-auto bg-dots relative",
             theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-900 border-slate-800"
           )}>
+            {error && (
+              <div className="absolute top-4 left-4 right-4 z-10">
+                <div className="bg-rose-50 border border-rose-100 text-rose-600 px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span className="font-medium">KaTeX Error: {error}</span>
+                </div>
+              </div>
+            )}
+            
             {input.trim() ? (
-              <div className="scale-150 transform">
+              <div className={cn(
+                "scale-150 transform transition-opacity",
+                error ? "opacity-50 grayscale" : "opacity-100"
+              )}>
                 <LatexMarkdown content={`$$ ${input} $$`} theme={theme} large />
               </div>
             ) : (

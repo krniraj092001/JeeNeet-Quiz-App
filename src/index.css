@@ -165,7 +165,7 @@
 }
 
 .markdown-body h3 {
-  @apply font-bold text-lg text-slate-800 mt-6 mb-1;
+  @apply border-none m-0 p-0;
 }
 
 .markdown-body hr {

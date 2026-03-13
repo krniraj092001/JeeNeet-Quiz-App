@@ -290,37 +290,45 @@ async function generateBatch(
 
     const generateCall = (model: string) => {
       const config: any = {
-        systemInstruction: `You are a world-class educational content creator and expert tutor for JEE and NEET. 
-        Your goal is to provide professional, textbook-quality questions and solutions.
+        systemInstruction: `You are an expert JEE and NEET Paper Setter with 20 years of experience. Your task is to generate highly accurate, conceptually deep Multiple Choice Questions (MCQs).
         
         CRITICAL: You MUST return a valid JSON array of objects.
         
-        PROFESSIONALISM & STYLE:
-        1. CLARITY: Every question must be unambiguous and mathematically sound.
-        2. NO CONVERSATIONAL FILLER: Do not use phrases like "Here is a question" or "I hope this helps".
-        3. ACCURATE TERMINOLOGY: Use standard academic terminology.
-        4. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
-        5. CONSISTENT FORMATTING: Use bold headers for steps in explanations.
-        
-        QUESTION TYPES: 
-           - MCQ: Standard 4-option question.
-           - NUMERICAL: Integer or decimal answer.
-           - STATEMENT: Two statements (I and II) followed by 4 standard options.
-           - MATCH: Two lists (List I and List II) that need to be matched. Provide 4 multiple choice options that are possible matching combinations (e.g., 'A-I, B-II, C-III, D-IV').
+        CONSTRAINTS:
+        1. DIFFICULTY SCALING: For every 10 questions, ensure 3 are Easy (NCERT-based), 5 are Moderate (Application-based), and 2 are Hard (Multi-concept linkage).
+        2. DISTRACTORS (OPTIONS): Do not use 'None of the above' or 'All of the above.' Create wrong options based on common student calculation mistakes (e.g., forgetting a $10^{-6}$ factor or a sign change).
+        3. CLARITY: Every question must be unambiguous and mathematically sound.
+        4. NO CONVERSATIONAL FILLER: Do not use phrases like "Here is a question" or "I hope this helps".
+        5. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
         
         EXPLANATION FORMAT:
-           - Start with a brief introductory sentence.
-           - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
-           - Keep the text inside each step concise and clear.
-           - End with the final answer clearly stated.
+        - Start with a brief introductory sentence in italics.
+        - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
+        - STYLE: Write the explanation in 'Hinglish' (e.g., 'Is formula mein hum value put karenge...') to make it feel like a senior NITian is explaining it.
+        - Keep the text inside each step concise and clear.
+        - CRITICAL: The final answer MUST be enclosed in a special code block like this:
+          \x60\x60\x60answer
+          [Final Answer with LaTeX]
+          \x60\x60\x60
+        - Example:
+          *This problem involves finding the equation of an ellipse given its foci and the constant sum of distances.*
+          
+          ### Step 1: Identify key parameters
+          Foci points $(4,0)$ and $(-4,0)$ hain, toh distance between foci $2c = 8$ hoga. Matlab $c=4$.
+          Constant sum $2a = 10$ diya hai, toh $a=5$.
+          
+          \x60\x60\x60answer
+          $\frac{x^2}{25} + \frac{y^2}{9} = 1$
+          \x60\x60\x60
         
         6. DIAGRAM PROMPT: ONLY provide a 'diagramPrompt' if the original source question explicitly includes a diagram or figure. CRITICAL: You MUST use Google Search to verify the accuracy of any diagram, graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it. Do NOT invent diagrams.
         7. EXPLANATION DIAGRAM: You MAY provide an 'explanationDiagramPrompt' if a visual aid would help. CRITICAL: You MUST use Google Search to verify the accuracy of any graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it.
         8. FORMAT: Return a valid JSON array. Never truncate.`,
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
-        tools: [{ googleSearch: {} }], // Added search grounding for accuracy
+        // tools: [{ googleSearch: {} }], // Removed search grounding as it can cause empty responses in JSON mode
         temperature: 0.2, 
+        maxOutputTokens: 8192,
       };
 
       if (mode === 'thinking') {
@@ -346,7 +354,6 @@ async function generateBatch(
     let text = response.text?.trim();
     
     if (!text) {
-      // Check if there are candidates but no text (could be safety filtered or other issues)
       if (response.candidates && response.candidates.length > 0) {
         const candidate = response.candidates[0];
         if (candidate.finishReason === 'SAFETY') {
@@ -360,7 +367,6 @@ async function generateBatch(
     }
     
     try {
-      // Find the first [ and last ] to isolate the array
       const firstBracket = text.indexOf('[');
       const lastBracket = text.lastIndexOf(']');
       
@@ -368,7 +374,6 @@ async function generateBatch(
         text = text.substring(firstBracket, lastBracket + 1);
       }
 
-      // Use jsonrepair to handle truncation or minor syntax errors
       let repairedJson = text;
       try {
         repairedJson = jsonrepair(text);
@@ -378,7 +383,6 @@ async function generateBatch(
 
       let rawQuestions = JSON.parse(repairedJson);
       
-      // If the model returned a single object instead of an array, wrap it
       if (rawQuestions && typeof rawQuestions === 'object' && !Array.isArray(rawQuestions)) {
         rawQuestions = [rawQuestions];
       }
@@ -396,7 +400,6 @@ async function generateBatch(
     } catch (parseError: any) {
       console.error("Failed to parse NITian response as JSON:", parseError);
       
-      // Retry on parsing errors
       if (retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -478,18 +481,22 @@ export async function solveDoubt(
     throw new Error("API_KEY_MISSING");
   }
 
-  const prompt = `You are a world-class JEE and NEET tutor. Solve the following doubt with textbook-quality precision in ${language}.
+  const prompt = `You are an expert JEE and NEET Paper Setter with 20 years of experience. Solve the following doubt with highly accurate, conceptually deep precision in ${language}.
   
   DOUBT:
   ${questionText}
   
   INSTRUCTIONS:
-  1. PROFESSIONALISM: Use clear, concise, and academic language. No conversational filler.
+  1. PROFESSIONALISM: Use clear, concise, and academic language for the question analysis.
   2. EXPLANATION FORMAT:
-     - Start with a brief introductory sentence.
+     - Start with a brief introductory sentence in italics.
      - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
+     - STYLE: Write the explanation in 'Hinglish' (e.g., 'Is formula mein hum value put karenge...') to make it feel like a senior NITian is explaining it.
      - Keep the text inside each step concise and clear.
-     - End with the final answer clearly stated.
+     - CRITICAL: The final answer MUST be enclosed in a special code block like this:
+       \x60\x60\x60answer
+       [Final Answer with LaTeX]
+       \x60\x60\x60
   3. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
   4. If a diagram would help, provide a detailed 'diagramPrompt'. Verify accuracy using Google Search.
   5. Identify the 'subject' and 'topic' of the question.`;
@@ -520,8 +527,9 @@ export async function solveDoubt(
           },
           required: ["explanation", "subject", "topic"]
         },
-        tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
+        // tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
         temperature: 0.2,
+        maxOutputTokens: 4096,
       },
     });
 
