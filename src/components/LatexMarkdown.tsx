@@ -1,6 +1,8 @@
 import React from 'react';
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { cn } from '../utils';
@@ -14,6 +16,13 @@ interface LatexMarkdownProps {
 
 const LatexMarkdown = ({ content, theme = 'light', className, large = false }: LatexMarkdownProps) => {
   if (!content) return null;
+
+  // Pre-process content to ensure math delimiters have space around them if they are adjacent to text
+  // This helps the parser identify them correctly and prevents "squashed" rendering
+  const processedContent = content
+    .replace(/([^\s$])(\$\$)/g, '$1\n$2')
+    .replace(/(\$\$)([^\s$])/g, '$1\n$2');
+
   return (
     <div className={cn(
       "markdown-body max-w-none py-1",
@@ -22,9 +31,11 @@ const LatexMarkdown = ({ content, theme = 'light', className, large = false }: L
       className
     )}>
       <Markdown 
-        remarkPlugins={[remarkMath]} 
+        remarkPlugins={[remarkMath, remarkGfm, remarkBreaks]} 
         rehypePlugins={[rehypeKatex]}
         components={{
+          // Ensure paragraphs don't squash text
+          p: ({ node, children }) => <p className="mb-4 last:mb-0 leading-relaxed">{children}</p>,
           h3: ({ node, ...props }) => (
             <div className="mt-8 mb-6">
               <h3 
@@ -49,7 +60,7 @@ const LatexMarkdown = ({ content, theme = 'light', className, large = false }: L
                   theme === 'light' ? "border-slate-900 bg-white" : "border-slate-100 bg-slate-900"
                 )}>
                   <Markdown 
-                    remarkPlugins={[remarkMath]} 
+                    remarkPlugins={[remarkMath, remarkGfm, remarkBreaks]} 
                     rehypePlugins={[rehypeKatex]}
                   >
                     {String(children).replace(/\n$/, '')}
@@ -65,7 +76,7 @@ const LatexMarkdown = ({ content, theme = 'light', className, large = false }: L
           }
         }}
       >
-        {content}
+        {processedContent}
       </Markdown>
     </div>
   );

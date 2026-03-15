@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required) - Firebase Auth UID
+    //   - email: string (optional) - User email
+    //   - isSubscribed: boolean (required) - Subscription status
+    //   - paymentId: string (optional) - Razorpay payment ID
+    //   - orderId: string (optional) - Razorpay order ID
+    //   - updatedAt: timestamp (optional) - Last update timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "krniraj092001@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'isSubscribed']) &&
+             data.uid is string &&
+             data.isSubscribed is bool;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{userId} {
+      // Users can read their own profile
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Users can create their own profile, but only with isSubscribed: false initially
+      // (Subscription is updated via server-side webhook)
+      allow create: if isOwner(userId) && 
+                      isValidUser(request.resource.data) &&
+                      request.resource.data.isSubscribed == false;
+      
+      // Users cannot update their own subscription status (only server/admin can)
+      allow update: if (isOwner(userId) && 
+                        isValidUser(request.resource.data) &&
+                        request.resource.data.isSubscribed == resource.data.isSubscribed) ||
+                      isAdmin();
+      
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -38,14 +38,18 @@ import {
   Link,
   Download,
   MessageSquare,
-  Volume2
+  Volume2,
+  Users,
+  Share2,
+  Lock,
+  CreditCard,
+  Gift
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import DppTemplate from './components/DppTemplate';
 import LatexMarkdown from './components/LatexMarkdown';
 import DoubtSolver from './components/DoubtSolver';
-import LatexConverter from './components/LatexConverter';
 import { generateSpeech } from './services/geminiService';
 import { 
   BarChart, 
@@ -69,6 +73,7 @@ import { Question, Language, ExamType, QuizMode } from './types';
 import { generateQuestions, chatDuringLoading } from './services/geminiService';
 import { cn } from './utils';
 import { DPPView } from './DPPView';
+import { SYLLABUS } from './constants/syllabus';
 
 const SUBJECTS = [
   { 
@@ -148,7 +153,7 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
 
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp' | 'doubt' | 'latex'>('home');
+  const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp' | 'doubt'>('home');
   const [language, setLanguage] = useState<Language>('English');
   const [examType, setExamType] = useState<ExamType>('NEET');
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -167,13 +172,53 @@ export default function App() {
   const [difficulty, setDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
   const [quizMode, setQuizMode] = useState<QuizMode>('standard');
   
+  // Monetization State
+  const [quizCount, setQuizCount] = useState(() => {
+    const saved = localStorage.getItem('quizCount');
+    return saved ? parseInt(saved) : 0;
+  });
+  const [doubtCount, setDoubtCount] = useState(() => {
+    const saved = localStorage.getItem('doubtCount');
+    return saved ? parseInt(saved) : 0;
+  });
+  const [isSubscribed, setIsSubscribed] = useState(() => {
+    return localStorage.getItem('isSubscribed') === 'true';
+  });
+  const [showPaywall, setShowPaywall] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('quizCount', quizCount.toString());
+  }, [quizCount]);
+
+  useEffect(() => {
+    localStorage.setItem('doubtCount', doubtCount.toString());
+  }, [doubtCount]);
+
+  useEffect(() => {
+    localStorage.setItem('isSubscribed', isSubscribed.toString());
+  }, [isSubscribed]);
+
+  const incrementQuizCount = () => {
+    setQuizCount(prev => prev + 1);
+  };
+
+  const incrementDoubtCount = () => {
+    setDoubtCount(prev => prev + 1);
+  };
+
+  const handleSubscribe = () => {
+    window.open("https://razorpay.me/@nitianvisionpointbynirajkumar", "_blank");
+  };
+  
   // Custom Quiz Builder State (Decoupled)
-  const [customSubject, setCustomSubject] = useState("");
+  const [customSubject, setCustomSubject] = useState(SYLLABUS.Physics[0]);
   const [customExamType, setCustomExamType] = useState<ExamType>('NEET');
   const [customQuestionCount, setCustomQuestionCount] = useState(15);
   const [customDifficulty, setCustomDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
   const [customLanguage, setCustomLanguage] = useState<Language>('English');
   const [customQuizMode, setCustomQuizMode] = useState<QuizMode>('standard');
+  const [syllabusSubject, setSyllabusSubject] = useState<keyof typeof SYLLABUS | 'Custom'>('Physics');
+  const [syllabusTopic, setSyllabusTopic] = useState<string>(SYLLABUS.Physics[0]);
   const [lastQuizParams, setLastQuizParams] = useState<{
     subject: string,
     examType: ExamType,
@@ -355,6 +400,13 @@ export default function App() {
     files?: { data: string, mimeType: string }[],
     overrideMode?: QuizMode
   ) => {
+    let currentExamType = overrideExamType || examType;
+    if (!isSubscribed) {
+      if (quizCount >= 5 || currentExamType === 'JEE_MAIN_MOCK' || currentExamType === 'NEET_MOCK') {
+        setShowPaywall(true);
+        return;
+      }
+    }
     setLoading(true);
     setSelectedSubject(subject);
     try {
@@ -511,6 +563,7 @@ export default function App() {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(currentIndex + 1);
     } else {
+      incrementQuizCount();
       setView('results');
     }
   };
@@ -770,6 +823,25 @@ export default function App() {
                 />
               )}
             </button>
+
+            {!isSubscribed && (
+              <div className="hidden sm:flex items-center gap-2">
+                <div className={cn(
+                  "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5",
+                  quizCount >= 5 ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600"
+                )}>
+                  <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", quizCount >= 5 ? "bg-rose-600" : "bg-emerald-600")} />
+                  {5 - quizCount > 0 ? `${5 - quizCount} Quizzes Left` : 'Quiz Limit'}
+                </div>
+                <div className={cn(
+                  "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5",
+                  doubtCount >= 5 ? "bg-rose-100 text-rose-600" : "bg-indigo-100 text-indigo-600"
+                )}>
+                  <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", doubtCount >= 5 ? "bg-rose-600" : "bg-indigo-600")} />
+                  {5 - doubtCount > 0 ? `${5 - doubtCount} Doubts Left` : 'Doubt Limit'}
+                </div>
+              </div>
+            )}
             <a
               href="https://razorpay.me/@nitianvisionpointbynirajkumar"
               target="_blank"
@@ -777,7 +849,7 @@ export default function App() {
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
             >
               <Zap className="w-4 h-4" />
-              <span className="hidden sm:inline">Upgrade</span>
+              <span className="hidden sm:inline">{isSubscribed ? 'Premium' : 'Upgrade'}</span>
             </a>
             {view === 'quiz' && (
               <div className={cn(
@@ -835,18 +907,73 @@ export default function App() {
                   </h3>
                   
                   <div className="space-y-4 flex-1">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Topic / Chapter</label>
-                      <input 
-                        type="text"
-                        placeholder="e.g. Thermodynamics, Indian History..."
-                        value={customSubject}
-                        onChange={(e) => setCustomSubject(e.target.value)}
-                        className={cn(
-                          "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm",
-                          theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
-                        )}
-                      />
+                    <div className="space-y-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Subject</label>
+                        <div className={cn(
+                          "flex flex-wrap rounded-xl border overflow-hidden p-1 gap-1",
+                          theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
+                        )}>
+                          {(['Physics', 'Chemistry', 'Mathematics', 'Biology', 'Custom'] as const).map(sub => (
+                            <button
+                              key={sub}
+                              onClick={() => {
+                                setSyllabusSubject(sub);
+                                if (sub !== 'Custom') {
+                                  setSyllabusTopic(SYLLABUS[sub as keyof typeof SYLLABUS][0]);
+                                  setCustomSubject(SYLLABUS[sub as keyof typeof SYLLABUS][0]);
+                                } else {
+                                  setSyllabusTopic("");
+                                  setCustomSubject("");
+                                }
+                              }}
+                              className={cn(
+                                "flex-1 min-w-[70px] py-1.5 text-[10px] font-bold rounded-lg transition-all",
+                                syllabusSubject === sub 
+                                  ? "bg-indigo-600 text-white shadow-sm" 
+                                  : (theme === 'light' ? "text-slate-500 hover:bg-slate-50" : "text-slate-400 hover:bg-slate-700")
+                              )}
+                            >
+                              {sub}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {syllabusSubject !== 'Custom' ? (
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Topic / Chapter</label>
+                          <select
+                            value={syllabusTopic}
+                            onChange={(e) => {
+                              setSyllabusTopic(e.target.value);
+                              setCustomSubject(e.target.value);
+                            }}
+                            className={cn(
+                              "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm appearance-none bg-transparent",
+                              theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
+                            )}
+                          >
+                            {SYLLABUS[syllabusSubject as keyof typeof SYLLABUS].map(topic => (
+                              <option key={topic} value={topic}>{topic}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Custom Topic</label>
+                          <input 
+                            type="text"
+                            placeholder="e.g. Thermodynamics, Indian History..."
+                            value={customSubject}
+                            onChange={(e) => setCustomSubject(e.target.value)}
+                            className={cn(
+                              "w-full p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm",
+                              theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
+                            )}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
@@ -994,7 +1121,7 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* LaTeX Converter Card */}
+                {/* PYQ Solver Card */}
                 <div 
                   className={cn(
                     "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors bg-gradient-to-br from-emerald-600 to-teal-700 text-white border-transparent",
@@ -1003,21 +1130,23 @@ export default function App() {
                 >
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold flex items-center gap-2 text-white">
-                      <Calculator className="w-5 h-5 text-white" />
-                      LaTeX to Output
+                      <FileText className="w-5 h-5 text-white" />
+                      Previous Year Questions
                     </h3>
-                    <span className="px-2 py-0.5 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest">Tool</span>
+                    <span className="px-2 py-0.5 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest">PYQ</span>
                   </div>
                   <p className="text-sm text-emerald-100 leading-relaxed">
-                    Convert complex LaTeX expressions into clear, readable mathematical output instantly. Perfect for checking formulas.
+                    Access a comprehensive database of previous year JEE and NEET questions with detailed solutions and analysis.
                   </p>
-                  <button
-                    onClick={() => setView('latex')}
+                  <a
+                    href="https://jee-neet-solver.in/exam_selection"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="w-full py-3 bg-white text-emerald-600 rounded-xl font-bold hover:bg-emerald-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
                   >
-                    <Calculator className="w-4 h-4" />
-                    Convert LaTeX
-                  </button>
+                    <Link className="w-4 h-4" />
+                    Solve PYQs Now
+                  </a>
                 </div>
 
                 {/* Language Selection */}
@@ -1640,10 +1769,12 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      {(!questions[currentIndex].options || questions[currentIndex].options.length === 0) && questions[currentIndex].type === 'MATCH' ? (
+                      {(!questions[currentIndex].options || questions[currentIndex].options.length === 0) ? (
                         <div className="space-y-4">
                           <p className={cn("text-sm font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
-                            Enter the correct matching sequence (e.g., A-I, B-II, C-III, D-IV):
+                            {questions[currentIndex].type === 'MATCH'
+                              ? "Enter the correct matching sequence (e.g., A-I, B-II, C-III, D-IV):"
+                              : "Enter your answer below:"}
                           </p>
                           <input 
                             type="text"
@@ -2108,40 +2239,61 @@ export default function App() {
                   <Trophy className="w-12 h-12 text-amber-500" />
                 </div>
                 <div className="space-y-2">
-                  <h2 className={cn("text-3xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Quiz Completed!</h2>
-                  <p className={cn("text-slate-500", theme === 'light' ? "" : "text-slate-400")}>Great job completing the {selectedSubject} {examType} practice session in {language}.</p>
+                  <h2 className={cn("text-4xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Quiz Results</h2>
+                  <p className={cn("text-lg", theme === 'light' ? "text-slate-600" : "text-slate-400")}>
+                    Detailed performance analysis of your {selectedSubject} {examType} session.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 py-6">
-                  <div className={cn("p-4 rounded-2xl", theme === 'light' ? "bg-slate-50" : "bg-slate-800")}>
-                    <div className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>
+                  <div className={cn("p-4 rounded-2xl border transition-all", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
+                    <div className={cn(
+                      "text-2xl font-bold",
+                      calculateResults().totalMarks > 0 ? "text-emerald-600" : calculateResults().totalMarks < 0 ? "text-rose-600" : theme === 'light' ? "text-slate-900" : "text-white"
+                    )}>
                       {calculateResults().totalMarks}/{calculateResults().maxMarks}
                     </div>
-                    <div className="text-xs text-slate-500 font-medium uppercase tracking-wider">Total Marks</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Total Marks</div>
                   </div>
-                  <div className={cn("p-4 rounded-2xl", theme === 'light' ? "bg-slate-50" : "bg-slate-800")}>
+                  <div className={cn("p-4 rounded-2xl border transition-all", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
                     <div className={cn("text-2xl font-bold text-emerald-600")}>+{calculateResults().correct * 4}</div>
-                    <div className="text-xs text-slate-500 font-medium uppercase tracking-wider">Correct ({calculateResults().correct})</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Correct ({calculateResults().correct})</div>
                   </div>
-                  <div className={cn("p-4 rounded-2xl", theme === 'light' ? "bg-slate-50" : "bg-slate-800")}>
+                  <div className={cn("p-4 rounded-2xl border transition-all", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
                     <div className={cn("text-2xl font-bold text-rose-600")}>-{calculateResults().incorrect}</div>
-                    <div className="text-xs text-slate-500 font-medium uppercase tracking-wider">Incorrect ({calculateResults().incorrect})</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Incorrect ({calculateResults().incorrect})</div>
                   </div>
-                  <div className={cn("p-4 rounded-2xl", theme === 'light' ? "bg-slate-50" : "bg-slate-800")}>
+                  <div className={cn("p-4 rounded-2xl border transition-all", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
                     <div className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{formatTime(timeElapsed)}</div>
-                    <div className="text-xs text-slate-500 font-medium uppercase tracking-wider">Time Taken</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Time Taken</div>
                   </div>
-                  <div className={cn("p-4 rounded-2xl", theme === 'light' ? "bg-slate-50" : "bg-slate-800")}>
+                  <div className={cn("p-4 rounded-2xl border transition-all", theme === 'light' ? "bg-slate-50 border-slate-100" : "bg-slate-800 border-slate-700")}>
                     <div className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>
-                      {Math.round((calculateResults().correct / questions.length) * 100)}%
+                      {questions.length > 0 ? Math.round((calculateResults().correct / questions.length) * 100) : 0}%
                     </div>
-                    <div className="text-xs text-slate-500 font-medium uppercase tracking-wider">Accuracy</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Accuracy</div>
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <div className="flex flex-col sm:flex-row gap-4 justify-center flex-wrap">
                   <button
-                    onClick={() => setView('report')}
+                    onClick={() => {
+                      const el = document.getElementById('review-solutions');
+                      if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-200"
+                  >
+                    <BookOpen className="w-5 h-5" />
+                    Review Solutions
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!isSubscribed && quizCount >= 4) {
+                        setShowPaywall(true);
+                      } else {
+                        setView('report');
+                      }
+                    }}
                     className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
                   >
                     <BarChart3 className="w-5 h-5" />
@@ -2192,12 +2344,17 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <h3 className={cn("text-xl font-bold px-2", theme === 'light' ? "text-slate-900" : "text-white")}>Review Answers</h3>
-                <div className="space-y-4">
+              <div className="space-y-6" id="review-solutions">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className={cn("text-2xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Detailed Solutions</h3>
+                  <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold uppercase tracking-widest">
+                    <BookOpen className="w-3 h-3" /> Step-by-Step Analysis
+                  </div>
+                </div>
+                <div className="space-y-6">
                   {questions.map((q, idx) => (
                     <div key={q.id} className={cn(
-                      "p-6 rounded-2xl border shadow-sm space-y-4 transition-colors",
+                      "p-8 rounded-3xl border shadow-sm space-y-6 transition-all hover:shadow-md",
                       theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
                     )}>
                       <div className="flex items-start justify-between gap-4">
@@ -2227,7 +2384,7 @@ export default function App() {
                               <Timer className="w-2.5 h-2.5" /> {questionTimes[idx]}s
                             </span>
                           </div>
-                          <div className={cn("font-semibold text-lg", theme === 'light' ? "text-slate-900" : "text-slate-100")}>
+                          <div className={cn("text-xl font-medium leading-relaxed", theme === 'light' ? "text-slate-800" : "text-slate-100")}>
                             <LatexMarkdown content={q.text} />
                           </div>
 
@@ -2272,18 +2429,18 @@ export default function App() {
                         {(() => {
                           const isCorrect = userAnswers[idx] !== null && String(userAnswers[idx]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase();
                           return isCorrect ? (
-                            <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-1 rounded text-xs font-bold shrink-0">
+                            <div className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border border-emerald-100">
                               <CheckCircle2 className="w-4 h-4" /> Correct
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-1 rounded text-xs font-bold shrink-0">
+                            <div className="flex items-center gap-1 text-rose-600 bg-rose-50 px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border border-rose-100">
                               <XCircle className="w-4 h-4" /> {userAnswers[idx] === null ? 'Unattempted' : 'Incorrect'}
                             </div>
                           );
                         })()}
                       </div>
 
-                      {q.type === 'NUMERICAL' ? (
+                      {q.type === 'NUMERICAL' || (!q.options || q.options.length === 0) ? (
                         <div className="space-y-2">
                           <div className={cn(
                             "p-4 rounded-xl border text-sm",
@@ -2312,54 +2469,64 @@ export default function App() {
                             <div 
                               key={oIdx}
                               className={cn(
-                                "p-3 rounded-xl text-sm border",
-                                String(oIdx) === String(q.correctAnswer) ? "bg-emerald-50 border-emerald-200 text-emerald-900 font-medium" :
+                                "p-4 rounded-2xl text-base border flex items-center gap-3 transition-all",
+                                String(oIdx) === String(q.correctAnswer) ? "bg-emerald-50 border-emerald-200 text-emerald-900 font-semibold shadow-sm" :
                                 String(oIdx) === String(userAnswers[idx]) ? "bg-rose-50 border-rose-200 text-rose-900" :
                                 theme === 'light' ? "bg-slate-50 border-slate-100 text-slate-500" : "bg-slate-800 border-slate-700 text-slate-400"
                               )}
                             >
-                              <span className="font-bold mr-2">{String.fromCharCode(65 + oIdx)}.</span>
+                              <span className={cn(
+                                "w-8 h-8 rounded-lg flex items-center justify-center font-bold shrink-0",
+                                String(oIdx) === String(q.correctAnswer) ? "bg-emerald-600 text-white" : "bg-white/50 border border-current"
+                              )}>
+                                {String.fromCharCode(65 + oIdx)}
+                              </span>
                               <LatexMarkdown content={opt} />
+                              {String(oIdx) === String(q.correctAnswer) && <CheckCircle2 className="w-5 h-5 ml-auto text-emerald-600 shrink-0" />}
+                              {String(oIdx) === String(userAnswers[idx]) && String(oIdx) !== String(q.correctAnswer) && <XCircle className="w-5 h-5 ml-auto text-rose-600 shrink-0" />}
                             </div>
                           ))}
                         </div>
                       )}
 
                       <div className={cn(
-                        "p-4 rounded-xl border space-y-4",
-                        theme === 'light' ? "bg-indigo-50/50 border-indigo-100" : "bg-indigo-900/20 border-indigo-900/50"
+                        "p-6 rounded-3xl border space-y-4",
+                        theme === 'light' ? "bg-indigo-50/30 border-indigo-100" : "bg-indigo-900/10 border-indigo-900/30"
                       )}>
                         <div className={cn(
-                          "p-6 rounded-2xl border bg-dots",
-                          theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                          "p-8 rounded-3xl border bg-white shadow-sm",
+                          theme === 'light' ? "border-slate-200" : "bg-slate-900 border-slate-800"
                         )}>
-                          <div className="flex items-center justify-between mb-6">
-                            <div className="flex items-center gap-2 text-indigo-700 font-bold text-xs uppercase tracking-wider">
-                              <BookOpen className="w-4 h-4" /> Step-by-Step Explanation
+                          <div className="flex items-center justify-between mb-8">
+                            <div className="flex items-center gap-3 text-indigo-600 font-bold text-sm uppercase tracking-widest">
+                              <div className="p-2 bg-indigo-100 rounded-xl">
+                                <BookOpen className="w-5 h-5" />
+                              </div>
+                              Detailed Solution
                             </div>
                             <button
                               onClick={() => handleSpeakExplanation(q.explanation, idx)}
                               className={cn(
-                                "p-1.5 rounded-lg transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider",
+                                "px-4 py-2 rounded-xl transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest",
                                 speakingIndex === idx 
-                                  ? "bg-indigo-600 text-white" 
-                                  : theme === 'light' ? "bg-indigo-100 text-indigo-600 hover:bg-indigo-200" : "bg-indigo-900/40 text-indigo-400 hover:bg-indigo-900/60"
+                                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" 
+                                  : theme === 'light' ? "bg-indigo-50 text-indigo-600 hover:bg-indigo-100" : "bg-indigo-900/40 text-indigo-400 hover:bg-indigo-900/60"
                               )}
                             >
-                              <Volume2 className={cn("w-3.5 h-3.5", speakingIndex === idx && "animate-pulse")} />
-                              {speakingIndex === idx ? "Stop" : "Listen"}
+                              <Volume2 className={cn("w-4 h-4", speakingIndex === idx && "animate-pulse")} />
+                              {speakingIndex === idx ? "Stop Audio" : "Listen Solution"}
                             </button>
                           </div>
-                          <div className={cn("text-base leading-relaxed", theme === 'light' ? "text-slate-700" : "text-slate-300")}>
+                          <div className={cn("text-lg leading-relaxed font-medium", theme === 'light' ? "text-slate-800" : "text-slate-200")}>
                             <LatexMarkdown content={q.explanation} />
                           </div>
                           
                           {q.explanationDiagramUrl && (
-                            <div className="flex justify-center py-4 bg-white rounded-xl border border-indigo-100/50 mt-2">
+                            <div className="flex justify-center py-6 bg-slate-50 rounded-2xl border border-slate-100 mt-6">
                               <img 
                                 src={q.explanationDiagramUrl} 
                                 alt="Explanation Diagram" 
-                                className="max-w-full h-auto rounded-lg"
+                                className="max-w-full h-auto rounded-xl shadow-sm"
                                 referrerPolicy="no-referrer"
                               />
                             </div>
@@ -2383,19 +2550,10 @@ export default function App() {
                 onBack={() => setView('home')}
                 theme={theme}
                 language={language}
-              />
-            </motion.div>
-          )}
-          {view === 'latex' && (
-            <motion.div
-              key="latex"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-            >
-              <LatexConverter 
-                onBack={() => setView('home')}
-                theme={theme}
+                isSubscribed={isSubscribed}
+                onShowPaywall={() => setShowPaywall(true)}
+                doubtCount={doubtCount}
+                incrementDoubtCount={incrementDoubtCount}
               />
             </motion.div>
           )}
@@ -2413,6 +2571,99 @@ export default function App() {
           onEnded={() => setSpeakingIndex(null)} 
           className="hidden"
         />
+
+        {/* Paywall Modal */}
+        <AnimatePresence>
+          {showPaywall && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowPaywall(false)}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className={cn(
+                  "relative w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden border",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+                )}
+              >
+                <div className="p-8 space-y-6">
+                  <div className="flex justify-between items-start">
+                    <div className="p-3 bg-indigo-100 rounded-2xl">
+                      <Lock className="w-8 h-8 text-indigo-600" />
+                    </div>
+                    <button 
+                      onClick={() => setShowPaywall(false)}
+                      className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                    >
+                      <X className="w-6 h-6 text-slate-400" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h2 className={cn("text-3xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
+                      {quizCount >= 5 || doubtCount >= 5 || examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK' ? "Premium Feature" : "Unlock Performance Analysis"}
+                    </h2>
+                    <p className={cn("text-lg", theme === 'light' ? "text-slate-600" : "text-slate-400")}>
+                      {quizCount >= 5 || doubtCount >= 5 || examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK'
+                        ? "You've reached your free limit or selected a premium feature. Unlock unlimited Quizzes, Mock Tests, and AI Doubt Solving."
+                        : "Students who analyze their mistakes are 3x more likely to succeed. Unlock your detailed performance report and unlimited doubts now."}
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className={cn(
+                      "p-6 rounded-2xl border-2 transition-all cursor-pointer group",
+                      "border-indigo-600 bg-indigo-50/50"
+                    )} onClick={handleSubscribe}>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-indigo-600 rounded-xl text-white">
+                            <CreditCard className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="font-bold text-indigo-900">Premium Access</div>
+                            <div className="text-sm text-indigo-600 font-medium">Unlimited Quizzes</div>
+                          </div>
+                        </div>
+                        <div className="text-2xl font-black text-indigo-600">₹29</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 flex flex-col gap-3">
+                    <button
+                      onClick={handleSubscribe}
+                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2"
+                    >
+                      <Zap className="w-5 h-5" />
+                      Unlock Now
+                    </button>
+                    <div className="flex justify-between items-center px-2">
+                      <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">
+                        Secure via Razorpay
+                      </p>
+                      <button 
+                        onClick={() => {
+                          setIsSubscribed(true);
+                          setShowPaywall(false);
+                        }}
+                        className="text-[10px] text-indigo-600 font-bold uppercase tracking-widest hover:underline"
+                      >
+                        Already Paid? Restore
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );

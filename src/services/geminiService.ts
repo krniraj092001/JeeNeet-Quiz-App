@@ -290,19 +290,25 @@ async function generateBatch(
 
     const generateCall = (model: string) => {
       const config: any = {
-        systemInstruction: `You are an expert JEE and NEET Paper Setter with 20 years of experience. Your task is to generate highly accurate, conceptually deep Multiple Choice Questions (MCQs).
+        systemInstruction: `You are a professional LaTeX Editor and Math Content Quality Checker with 20 years of experience in JEE and NEET paper setting.
         
-        CRITICAL: You MUST return a valid JSON array of objects.
+        YOUR TASK:
+        1. CLEAN TEXT: Remove any double-rendering or duplicate equations (e.g., change 'y2=8x y2 =8x' to just '$y^2 = 8x$').
+        2. LATEX CONVERSION: Convert ALL mathematical AND chemical expressions into standard LaTeX using $ ... $ for inline math and $$...$$ for standalone equations. For example, never write H2SO4 as plain text; it MUST be $\\\\text{H}_2\\\\text{SO}_4$.
+        3. TEXT IN LATEX: Use \\\\text{...} inside LaTeX for any words or labels (e.g., $\\\\text{adj}(2A)$).
+        4. HINGLISH STYLE: Maintain the 'Hinglish' explanation style but fix the grammar and readability.
+        5. STRUCTURE: Organize the solution into clear, numbered 'Steps'.
+        6. FORMAT: Output the final result in clean Markdown format within a valid JSON array of objects.
+        7. EXACT COUNT: You MUST generate EXACTLY the number of questions requested by the user. If the user asks for ${count} questions, you MUST return exactly ${count} questions in the JSON array. Do not generate more or fewer questions than requested.
         
         CONSTRAINTS:
         1. DIFFICULTY SCALING: For every 10 questions, ensure 3 are Easy (NCERT-based), 5 are Moderate (Application-based), and 2 are Hard (Multi-concept linkage).
         2. DISTRACTORS (OPTIONS): Do not use 'None of the above' or 'All of the above.' Create wrong options based on common student calculation mistakes (e.g., forgetting a $10^{-6}$ factor or a sign change).
         3. CLARITY: Every question must be unambiguous and mathematically sound.
         4. NO CONVERSATIONAL FILLER: Do not use phrases like "Here is a question" or "I hope this helps".
-        5. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
         
         EXPLANATION FORMAT:
-        - Start with a brief introductory sentence in italics.
+        - Start with a brief introductory sentence in italics (wrapped in *...*).
         - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
         - STYLE: Write the explanation in 'Hinglish' (e.g., 'Is formula mein hum value put karenge...') to make it feel like a senior NITian is explaining it.
         - Keep the text inside each step concise and clear.
@@ -318,7 +324,7 @@ async function generateBatch(
           Constant sum $2a = 10$ diya hai, toh $a=5$.
           
           \x60\x60\x60answer
-          $\frac{x^2}{25} + \frac{y^2}{9} = 1$
+          $\\\\frac{x^2}{25} + \\\\frac{y^2}{9} = 1$
           \x60\x60\x60
         
         6. DIAGRAM PROMPT: ONLY provide a 'diagramPrompt' if the original source question explicitly includes a diagram or figure. CRITICAL: You MUST use Google Search to verify the accuracy of any diagram, graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it. Do NOT invent diagrams.
@@ -326,7 +332,7 @@ async function generateBatch(
         8. FORMAT: Return a valid JSON array. Never truncate.`,
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
-        // tools: [{ googleSearch: {} }], // Removed search grounding as it can cause empty responses in JSON mode
+        tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
         temperature: 0.2, 
         maxOutputTokens: 8192,
       };
@@ -367,13 +373,6 @@ async function generateBatch(
     }
     
     try {
-      const firstBracket = text.indexOf('[');
-      const lastBracket = text.lastIndexOf(']');
-      
-      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket >= firstBracket) {
-        text = text.substring(firstBracket, lastBracket + 1);
-      }
-
       let repairedJson = text;
       try {
         repairedJson = jsonrepair(text);
@@ -481,15 +480,23 @@ export async function solveDoubt(
     throw new Error("API_KEY_MISSING");
   }
 
-  const prompt = `You are an expert JEE and NEET Paper Setter with 20 years of experience. Solve the following doubt with highly accurate, conceptually deep precision in ${language}.
+  const prompt = `You are a professional LaTeX Editor and Math Content Quality Checker with 20 years of experience in JEE and NEET.
   
+  YOUR TASK:
+  1. CLEAN TEXT: Remove any double-rendering or duplicate equations (e.g., change 'y2=8x y2 =8x' to just '$y^2 = 8x$').
+  2. LATEX CONVERSION: Convert all mathematical expressions into standard LaTeX using $ ... $ for inline math and $$...$$ for standalone equations.
+  3. TEXT IN LATEX: Use \\\\text{...} inside LaTeX for any words or labels (e.g., $\\\\text{adj}(2A)$).
+  4. HINGLISH STYLE: Maintain the 'Hinglish' explanation style but fix the grammar and readability.
+  5. STRUCTURE: Organize the solution into clear, numbered 'Steps'.
+  6. FORMAT: Output the final result in clean Markdown format.
+
   DOUBT:
   ${questionText}
   
   INSTRUCTIONS:
   1. PROFESSIONALISM: Use clear, concise, and academic language for the question analysis.
   2. EXPLANATION FORMAT:
-     - Start with a brief introductory sentence in italics.
+     - Start with a brief introductory sentence in italics (wrapped in *...*).
      - Use numbered steps: "### Step 1: [Heading]" followed by the explanation.
      - STYLE: Write the explanation in 'Hinglish' (e.g., 'Is formula mein hum value put karenge...') to make it feel like a senior NITian is explaining it.
      - Keep the text inside each step concise and clear.
@@ -497,9 +504,8 @@ export async function solveDoubt(
        \x60\x60\x60answer
        [Final Answer with LaTeX]
        \x60\x60\x60
-  3. SIMPLE FORMATTING: Use plain text for simple variables and formulas. Use LaTeX ($...$) only for complex equations.
-  4. If a diagram would help, provide a detailed 'diagramPrompt'. Verify accuracy using Google Search.
-  5. Identify the 'subject' and 'topic' of the question.`;
+  3. If a diagram would help, provide a detailed 'diagramPrompt'. Verify accuracy using Google Search.
+  4. Identify the 'subject' and 'topic' of the question.`;
 
   try {
     const contents: any = { parts: [{ text: prompt }] };
@@ -527,7 +533,7 @@ export async function solveDoubt(
           },
           required: ["explanation", "subject", "topic"]
         },
-        // tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
+        tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
         temperature: 0.2,
         maxOutputTokens: 4096,
       },
@@ -546,7 +552,19 @@ export async function solveDoubt(
       throw new Error("Empty response from NITian.");
     }
 
-    const result = JSON.parse(text);
+    let result;
+    try {
+      let repairedJson = text;
+      try {
+        repairedJson = jsonrepair(text);
+      } catch (e) {
+        console.warn("jsonrepair failed in solveDoubt", e);
+      }
+      result = JSON.parse(repairedJson);
+    } catch (e) {
+      console.error("Failed to parse doubt response:", e);
+      throw new Error("Failed to parse response from NITian.");
+    }
     
     // Extract grounding sources if available
     const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.map(chunk => ({

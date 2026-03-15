@@ -27,9 +27,21 @@ interface DoubtSolverProps {
   onBack: () => void;
   theme: 'light' | 'dark';
   language: Language;
+  isSubscribed: boolean;
+  onShowPaywall: () => void;
+  doubtCount: number;
+  incrementDoubtCount: () => void;
 }
 
-export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProps) {
+export default function DoubtSolver({ 
+  onBack, 
+  theme, 
+  language, 
+  isSubscribed, 
+  onShowPaywall,
+  doubtCount,
+  incrementDoubtCount
+}: DoubtSolverProps) {
   const [questionText, setQuestionText] = useState('');
   const [selectedImage, setSelectedImage] = useState<{ data: string, mimeType: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -276,6 +288,11 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
     e.preventDefault();
     if (!questionText.trim() && !selectedImage) return;
 
+    if (!isSubscribed && doubtCount >= 5) {
+      onShowPaywall();
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setResponse(null);
@@ -283,6 +300,7 @@ export default function DoubtSolver({ onBack, theme, language }: DoubtSolverProp
     try {
       const result = await solveDoubt(questionText, selectedImage || undefined, language);
       setResponse(result);
+      incrementDoubtCount();
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to solve doubt. Please try again.");
