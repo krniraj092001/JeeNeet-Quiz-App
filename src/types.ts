@@ -42,6 +42,29 @@ export interface QuizState {
   endTime?: number;
 }
 
+export interface QuizResult {
+  id?: string;
+  userName: string;
+  userEmail: string;
+  examType: ExamType;
+  subject: string;
+  score: number;
+  totalQuestions: number;
+  correctAnswers: number;
+  wrongAnswers: number;
+  unanswered: number;
+  timeElapsed: number;
+  timestamp: number;
+  questions: {
+    text: string;
+    userAnswer: number | string | null;
+    correctAnswer: number | string;
+    isCorrect: boolean;
+    explanation: string;
+    options?: string[];
+  }[];
+}
+
 export const QUIZ_SCHEMA = {
   type: Type.ARRAY,
   items: {

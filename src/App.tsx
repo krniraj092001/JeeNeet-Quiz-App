@@ -43,7 +43,9 @@ import {
   Share2,
   Lock,
   CreditCard,
-  Gift
+  Gift,
+  Send,
+  Bell
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -69,11 +71,63 @@ import {
 import Markdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Question, Language, ExamType, QuizMode } from './types';
+import { Question, Language, ExamType, QuizMode, QuizResult } from './types';
 import { generateQuestions, chatDuringLoading } from './services/geminiService';
 import { cn } from './utils';
 import { DPPView } from './DPPView';
 import { SYLLABUS } from './constants/syllabus';
+import { db, auth, doc, getDoc, collection, addDoc } from './firebase';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+};
 
 const SUBJECTS = [
   { 
@@ -198,6 +252,41 @@ export default function App() {
     localStorage.setItem('isSubscribed', isSubscribed.toString());
   }, [isSubscribed]);
 
+  const addNotification = (message: string) => {
+    const newNotif = {
+      id: Math.random().toString(36).substr(2, 9),
+      message,
+      time: new Date(),
+      read: false
+    };
+    setNotifications(prev => [newNotif, ...prev]);
+  };
+  const handleSubjectTabClick = (subject: string) => {
+    setActiveSubjectTab(subject);
+    const firstIdx = questions.findIndex(q => q.subject === subject);
+    if (firstIdx !== -1) {
+      goToQuestion(firstIdx);
+    }
+  };
+
+  const getQuestionStatus = (idx: number) => {
+    const isAnswered = userAnswers[idx] !== null;
+    const isMarked = markedForReview[idx];
+    const isVisited = visitedQuestions[idx];
+
+    if (isAnswered && isMarked) return 'answered-marked';
+    if (isMarked) return 'marked';
+    if (isAnswered) return 'answered';
+    if (isVisited) return 'not-answered';
+    return 'not-visited';
+  };
+
+  useEffect(() => {
+    if (view === 'quiz' && questions[currentIndex]) {
+      setActiveSubjectTab(questions[currentIndex].subject);
+    }
+  }, [currentIndex, view, questions]);
+
   const incrementQuizCount = () => {
     setQuizCount(prev => prev + 1);
   };
@@ -230,9 +319,150 @@ export default function App() {
   } | null>(null);
 
   const [loadingChatMessages, setLoadingChatMessages] = useState<{role: 'user' | 'assistant', content: string}[]>([]);
+  const loadingChatEndRef = useRef<HTMLDivElement>(null);
   const [loadingChatInput, setLoadingChatInput] = useState("");
   const [isLoadingChatReplying, setIsLoadingChatReplying] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStage, setLoadingStage] = useState<'syllabus' | 'questions' | 'explanations' | 'finalizing'>('syllabus');
+  const [estimatedTime, setEstimatedTime] = useState(90);
+
+  useEffect(() => {
+    if (loadingChatEndRef.current) {
+      loadingChatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [loadingChatMessages, isLoadingChatReplying]);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (loading) {
+      setLoadingProgress(0);
+      setLoadingStage('syllabus');
+      setEstimatedTime(90);
+      interval = setInterval(() => {
+        setLoadingProgress(prev => {
+          if (prev >= 98) return prev;
+          const increment = prev < 50 ? 1.5 : (prev < 80 ? 0.8 : 0.3);
+          const next = prev + increment;
+          
+          if (next < 25) setLoadingStage('syllabus');
+          else if (next < 65) setLoadingStage('questions');
+          else if (next < 90) setLoadingStage('explanations');
+          else setLoadingStage('finalizing');
+          
+          return next;
+        });
+        setEstimatedTime(prev => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
+  const [showMobilePalette, setShowMobilePalette] = useState(false);
+  const [markedForReview, setMarkedForReview] = useState<boolean[]>([]);
+  const [visitedQuestions, setVisitedQuestions] = useState<boolean[]>([]);
+  const [activeSubjectTab, setActiveSubjectTab] = useState<string>("");
+  const [notifications, setNotifications] = useState<{ id: string; message: string; time: Date; read: boolean }[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [sharedResult, setSharedResult] = useState<QuizResult | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const resultId = urlParams.get('resultId');
+    if (resultId) {
+      loadSharedResult(resultId);
+    }
+  }, []);
+
+  const loadSharedResult = async (id: string) => {
+    setLoading(true);
+    try {
+      const resultDoc = await getDoc(doc(db, 'results', id));
+      if (resultDoc.exists()) {
+        const data = resultDoc.data() as QuizResult;
+        setSharedResult(data);
+        setQuestions(data.questions.map((q, i) => ({
+          id: `shared-${i}`,
+          text: q.text,
+          type: 'MCQ',
+          correctAnswer: q.correctAnswer,
+          explanation: q.explanation,
+          options: q.options,
+          subject: data.subject,
+          topic: 'Shared Result',
+          grade: 'Class 12',
+          difficulty: 'Moderate',
+          language: 'English',
+          examType: data.examType
+        })));
+        setUserAnswers(data.questions.map(q => q.userAnswer));
+        setSelectedSubject(data.subject);
+        setExamType(data.examType);
+        setTimeElapsed(data.timeElapsed);
+        setView('results');
+      }
+    } catch (error) {
+      console.error("Error loading shared result:", error);
+      alert("Failed to load shared result.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (isSharing) return;
+    setIsSharing(true);
+    
+    const results = calculateResults();
+    const resultData: QuizResult = {
+      userName: auth.currentUser?.displayName || 'Aspirant',
+      userEmail: auth.currentUser?.email || 'anonymous',
+      examType,
+      subject: selectedSubject || 'Mock Test',
+      score: results.totalMarks,
+      totalQuestions: questions.length,
+      correctAnswers: results.correct,
+      wrongAnswers: results.incorrect,
+      unanswered: results.unattempted,
+      timeElapsed,
+      timestamp: Date.now(),
+      questions: questions.map((q, i) => ({
+        text: q.text,
+        userAnswer: userAnswers[i],
+        correctAnswer: q.correctAnswer,
+        isCorrect: String(userAnswers[i]).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase(),
+        explanation: q.explanation,
+        options: q.options
+      }))
+    };
+
+    try {
+      const docRef = await addDoc(collection(db, 'results'), resultData);
+      const shareUrl = `${window.location.origin}${window.location.pathname}?resultId=${docRef.id}`;
+      
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: `My ${selectedSubject} Quiz Results`,
+            text: `I scored ${results.totalMarks}/${results.maxMarks} in my ${selectedSubject} quiz on RankBoost with NITian! Check it out:`,
+            url: shareUrl,
+          });
+        } catch (err) {
+          // Fallback if share is cancelled or fails
+          await navigator.clipboard.writeText(shareUrl);
+          addNotification("Shareable link copied to clipboard!");
+        }
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        addNotification("Shareable link copied to clipboard!");
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'results');
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   const handleSpeakExplanation = async (text: string, index: number) => {
     if (speakingIndex === index) {
@@ -334,34 +564,63 @@ export default function App() {
     }
 
     // Temporarily show the element for capture
+    const originalStyle = element.style.display;
+    const originalPosition = element.style.position;
+    const originalLeft = element.style.left;
+    
     element.style.display = 'block';
+    element.style.position = 'fixed';
+    element.style.left = '-9999px';
     
     try {
+      // Give it a moment to render any LaTeX and fonts
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 4, // Higher scale for superior quality
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        windowWidth: 1000
+        windowWidth: 1000,
+        allowTaint: false,
+        imageTimeout: 0,
+        onclone: (clonedDoc) => {
+          const clonedElement = clonedDoc.getElementById('dpp-template');
+          if (clonedElement) {
+            clonedElement.style.display = 'block';
+            clonedElement.style.visibility = 'visible';
+          }
+        }
       });
       
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgData = canvas.toDataURL('image/png', 1.0);
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
       
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = pdfWidth / imgWidth;
+      const canvasHeightInMm = imgHeight * ratio;
+      
+      let heightLeft = canvasHeightInMm;
       let position = 0;
 
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+      // Add first page
+      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, canvasHeightInMm, undefined, 'SLOW');
+      heightLeft -= pdfHeight;
 
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
+      // Add subsequent pages if content exceeds one page
+      while (heightLeft > 0) {
+        position = heightLeft - canvasHeightInMm;
         pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, canvasHeightInMm, undefined, 'SLOW');
+        heightLeft -= pdfHeight;
       }
 
       pdf.save(`DPP_${selectedSubject?.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`);
@@ -369,7 +628,9 @@ export default function App() {
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF. Please try again.');
     } finally {
-      element.style.display = 'none';
+      element.style.display = originalStyle;
+      element.style.position = originalPosition;
+      element.style.left = originalLeft;
       setIsDownloading(false);
     }
   };
@@ -383,6 +644,7 @@ export default function App() {
     setTimeElapsed(0);
     setQuestionTimes([]);
     setLastQuestionStartTime(0);
+    setSharedResult(null);
   };
 
   const beginTest = () => {
@@ -408,6 +670,7 @@ export default function App() {
       }
     }
     setLoading(true);
+    setSharedResult(null);
     setSelectedSubject(subject);
     try {
       // Small initial delay to ensure quota is fresh
@@ -489,6 +752,9 @@ export default function App() {
       setQuestions(qs);
       setUserAnswers(new Array(qs.length).fill(null));
       setQuestionTimes(new Array(qs.length).fill(0));
+      setMarkedForReview(new Array(qs.length).fill(false));
+      setVisitedQuestions(new Array(qs.length).fill(false).map((_, i) => i === 0));
+      setActiveSubjectTab(qs[0]?.subject || "");
       setCurrentIndex(0);
       setTimeElapsed(0);
       
@@ -502,8 +768,10 @@ export default function App() {
       }
       
       if (currentExamType === 'DPP') {
+        addNotification(`Your DPP for ${displaySubject} is ready!`);
         setView('dpp');
       } else {
+        addNotification(`Your ${currentExamType.replace(/_/g, ' ')} Mock Test is ready!`);
         setView('ready');
       }
     } catch (error: any) {
@@ -545,11 +813,36 @@ export default function App() {
   };
 
   const skipQuestion = () => {
-    // Clear the answer for the current question when skipping
+    nextQuestion();
+  };
+
+  const markForReviewAndNext = () => {
+    const newMarked = [...markedForReview];
+    newMarked[currentIndex] = true;
+    setMarkedForReview(newMarked);
+    nextQuestion();
+  };
+
+  const clearResponse = () => {
     const newAnswers = [...userAnswers];
     newAnswers[currentIndex] = null;
     setUserAnswers(newAnswers);
-    nextQuestion();
+  };
+
+  const goToQuestion = (index: number) => {
+    const now = Date.now();
+    const timeSpent = Math.floor((now - lastQuestionStartTime) / 1000);
+    const newTimes = [...questionTimes];
+    newTimes[currentIndex] += timeSpent;
+    setQuestionTimes(newTimes);
+    setLastQuestionStartTime(now);
+
+    setCurrentIndex(index);
+    setVisitedQuestions(prev => {
+      const next = [...prev];
+      next[index] = true;
+      return next;
+    });
   };
 
   const nextQuestion = () => {
@@ -561,7 +854,13 @@ export default function App() {
     setLastQuestionStartTime(now);
 
     if (currentIndex < questions.length - 1) {
-      setCurrentIndex(currentIndex + 1);
+      const nextIdx = currentIndex + 1;
+      setCurrentIndex(nextIdx);
+      setVisitedQuestions(prev => {
+        const next = [...prev];
+        next[nextIdx] = true;
+        return next;
+      });
     } else {
       incrementQuizCount();
       setView('results');
@@ -577,7 +876,13 @@ export default function App() {
     setLastQuestionStartTime(now);
 
     if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
+      const prevIdx = currentIndex - 1;
+      setCurrentIndex(prevIdx);
+      setVisitedQuestions(prev => {
+        const next = [...prev];
+        next[prevIdx] = true;
+        return next;
+      });
     }
   };
 
@@ -638,132 +943,268 @@ export default function App() {
   ];
 
   if (loading) {
+    const stages = [
+      { id: 'syllabus', label: 'Fetching syllabus data', icon: BookOpen, color: 'text-blue-500', bg: 'bg-blue-50' },
+      { id: 'questions', label: 'Generating questions', icon: BrainCircuit, color: 'text-purple-500', bg: 'bg-purple-50' },
+      { id: 'explanations', label: 'Creating explanations', icon: MessageSquare, color: 'text-amber-500', bg: 'bg-amber-50' },
+      { id: 'finalizing', label: 'Finalizing quiz', icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' }
+    ];
+
     return (
       <div className={cn(
         "min-h-screen flex flex-col items-center justify-center transition-colors duration-300 p-4",
-        theme === 'light' ? "bg-white text-slate-900" : "bg-slate-900 text-white"
+        theme === 'light' ? "bg-slate-50 text-slate-900" : "bg-slate-950 text-white"
       )}>
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-          className="mb-4"
-        >
-          <BrainCircuit className="w-12 h-12 text-indigo-600" />
-        </motion.div>
-        <h2 className="text-xl font-semibold mb-2">Generating your personalized quiz...</h2>
-        <p className="text-slate-500 mb-8 text-center max-w-md">The quiz creation process usually takes 1 to 3 minutes. Feel free to chat with me while you wait!</p>
-        
-        <div className={cn(
-          "w-full max-w-2xl rounded-2xl border shadow-lg overflow-hidden flex flex-col",
-          theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700",
-          "h-[400px]"
-        )}>
-          <div className={cn(
-            "p-4 border-b flex items-center gap-3",
-            theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-900/50 border-slate-700"
-          )}>
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
-              <MessageSquare className="w-4 h-4 text-indigo-600" />
+        <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          {/* Left Column: Progress & Stages */}
+          <div className="lg:col-span-5 space-y-8">
+            <div className="space-y-4">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold uppercase tracking-widest">
+                <div className="w-2 h-2 bg-indigo-600 rounded-full animate-ping" />
+                AI Generation in Progress
+              </div>
+              <h2 className="text-3xl font-bold tracking-tight leading-tight">
+                Crafting your <span className="text-indigo-600">Perfect Quiz</span>
+              </h2>
+              <p className={cn(
+                "text-sm",
+                theme === 'light' ? "text-slate-500" : "text-slate-400"
+              )}>
+                Our advanced AI is curating a personalized set of questions based on your selection.
+              </p>
             </div>
-            <div className="flex-1">
-              <h3 className="font-bold text-sm">NITian Assistant</h3>
-              <p className="text-[10px] text-slate-500">Online • Waiting for quiz generation</p>
+
+            {/* Stages List */}
+            <div className="space-y-3">
+              {stages.map((stage, idx) => {
+                const isCompleted = stages.findIndex(s => s.id === loadingStage) > idx;
+                const isActive = stage.id === loadingStage;
+                
+                return (
+                  <motion.div 
+                    key={stage.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.1 }}
+                    className={cn(
+                      "flex items-center gap-4 p-4 rounded-2xl border transition-all duration-500",
+                      isActive 
+                        ? (theme === 'light' ? "bg-white border-indigo-200 shadow-lg shadow-indigo-500/5 scale-105" : "bg-slate-900 border-indigo-500/50 shadow-lg shadow-indigo-500/10 scale-105")
+                        : isCompleted
+                          ? (theme === 'light' ? "bg-emerald-50/50 border-emerald-100 opacity-60" : "bg-emerald-950/10 border-emerald-900/30 opacity-60")
+                          : (theme === 'light' ? "bg-white/50 border-slate-100 opacity-40" : "bg-slate-900/50 border-slate-800 opacity-40")
+                    )}
+                  >
+                    <div className={cn(
+                      "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
+                      isActive ? stage.bg : (isCompleted ? "bg-emerald-100" : "bg-slate-100")
+                    )}>
+                      {isCompleted ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      ) : (
+                        <stage.icon className={cn("w-5 h-5", isActive ? stage.color : "text-slate-400")} />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className={cn(
+                        "text-sm font-bold",
+                        isActive ? (theme === 'light' ? "text-slate-900" : "text-white") : "text-slate-500"
+                      )}>
+                        {stage.label}
+                      </p>
+                      {isActive && (
+                        <motion.p 
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="text-[10px] text-indigo-600 font-medium mt-0.5"
+                        >
+                          Processing...
+                        </motion.p>
+                      )}
+                    </div>
+                    {isActive && (
+                      <div className="flex gap-1">
+                        {[0, 1, 2].map(i => (
+                          <motion.div
+                            key={i}
+                            animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
+                            transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
+                            className="w-1 h-1 bg-indigo-600 rounded-full"
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Progress Bar & Time */}
+            <div className="space-y-4 pt-4">
+              <div className="flex justify-between items-end">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Overall Progress</p>
+                  <p className="text-2xl font-black text-indigo-600">{Math.round(loadingProgress)}%</p>
+                </div>
+                <div className="text-right space-y-1">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Time Remaining</p>
+                  <p className="text-sm font-mono font-bold text-slate-600 dark:text-slate-400">
+                    {Math.floor(estimatedTime / 60)}m {estimatedTime % 60}s
+                  </p>
+                </div>
+              </div>
+              <div className="h-3 w-full bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden p-0.5">
+                <motion.div 
+                  className="h-full bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-full shadow-[0_0_10px_rgba(79,70,229,0.4)]"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${loadingProgress}%` }}
+                  transition={{ duration: 0.5 }}
+                />
+              </div>
             </div>
           </div>
-          
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {loadingChatMessages.length === 0 && (
-              <div className="space-y-4">
-                <div className="flex justify-start">
-                  <div className={cn(
-                    "max-w-[80%] rounded-2xl p-3 text-sm",
-                    theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-700 text-slate-200",
-                    "rounded-tl-sm"
-                  )}>
-                    Hi there! I'm creating your quiz right now. Ask me anything while we wait!
+
+          {/* Right Column: AI Assistant Chat */}
+          <div className="lg:col-span-7">
+            <div className={cn(
+              "rounded-3xl border shadow-2xl overflow-hidden flex flex-col transition-all h-[600px] relative",
+              theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
+            )}>
+              <div className={cn(
+                "p-5 border-b flex items-center justify-between",
+                theme === 'light' ? "bg-slate-50/80 border-slate-200" : "bg-slate-950/80 border-slate-800",
+                "backdrop-blur-md"
+              )}>
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                      <BrainCircuit className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white dark:border-slate-900 rounded-full" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base">NITian Assistant</h3>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                      <p className="text-[10px] text-slate-500 font-medium">Active • Ask me anything!</p>
+                    </div>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {CHAT_SUGGESTIONS.map((suggestion, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleLoadingChatSubmit(undefined, suggestion)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-full text-[11px] font-medium transition-all",
-                        theme === 'light' 
-                          ? "bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100" 
-                          : "bg-indigo-900/30 text-indigo-400 hover:bg-indigo-900/50 border border-indigo-900/50"
-                      )}
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
+                <div className="px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-full text-[10px] font-black uppercase tracking-tighter">
+                  AI Chat
                 </div>
               </div>
-            )}
-            {loadingChatMessages.map((msg, idx) => (
-              <div key={idx} className={cn(
-                "flex",
-                msg.role === 'user' ? "justify-end" : "justify-start"
-              )}>
-                <div className={cn(
-                  "max-w-[80%] rounded-2xl p-3 text-sm",
-                  msg.role === 'user' 
-                    ? "bg-indigo-600 text-white rounded-tr-sm" 
-                    : (theme === 'light' ? "bg-slate-100 text-slate-800 rounded-tl-sm" : "bg-slate-700 text-slate-200 rounded-tl-sm")
-                )}>
-                  <Markdown>{msg.content}</Markdown>
-                </div>
-              </div>
-            ))}
-            {isLoadingChatReplying && (
-              <div className="flex justify-start">
-                <div className={cn(
-                  "max-w-[80%] rounded-2xl p-3 text-sm flex items-center gap-2",
-                  theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-700 text-slate-200",
-                  "rounded-tl-sm"
-                )}>
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" />
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
-                </div>
-              </div>
-            )}
-          </div>
-          
-          <form onSubmit={handleLoadingChatSubmit} className={cn(
-            "p-3 border-t",
-            theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700"
-          )}>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={loadingChatInput}
-                onChange={(e) => setLoadingChatInput(e.target.value)}
-                placeholder="Ask me anything..."
-                disabled={isLoadingChatReplying}
-                className={cn(
-                  "flex-1 px-4 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-sm",
-                  theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-900 border-slate-700 text-white"
+              
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
+                {loadingChatMessages.length === 0 && (
+                  <div className="space-y-6">
+                    <div className="flex justify-start">
+                      <div className={cn(
+                        "max-w-[85%] rounded-2xl p-4 text-sm leading-relaxed shadow-sm",
+                        theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-800 text-slate-200",
+                        "rounded-tl-sm"
+                      )}>
+                        Hi! I'm your AI study partner. While I'm preparing your quiz, would you like to discuss any specific topic or need some last-minute tips?
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {CHAT_SUGGESTIONS.map((suggestion, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleLoadingChatSubmit(undefined, suggestion)}
+                          className={cn(
+                            "px-4 py-3 rounded-xl text-left text-xs font-medium transition-all flex items-center gap-2 group",
+                            theme === 'light' 
+                              ? "bg-white text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 hover:border-indigo-200" 
+                              : "bg-slate-800 text-slate-300 hover:bg-indigo-900/30 hover:text-indigo-400 border border-slate-700 hover:border-indigo-900/50"
+                          )}
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 group-hover:scale-150 transition-transform" />
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
-              />
-              <button
-                type="submit"
-                disabled={!loadingChatInput.trim() || isLoadingChatReplying}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-              >
-                Send
-              </button>
+                {loadingChatMessages.map((msg, idx) => (
+                  <div key={idx} className={cn(
+                    "flex",
+                    msg.role === 'user' ? "justify-end" : "justify-start"
+                  )}>
+                    <div className={cn(
+                      "max-w-[85%] rounded-2xl p-4 text-sm leading-relaxed shadow-sm",
+                      msg.role === 'user' 
+                        ? "bg-indigo-600 text-white rounded-tr-sm" 
+                        : (theme === 'light' ? "bg-slate-100 text-slate-800 rounded-tl-sm" : "bg-slate-800 text-slate-200 rounded-tl-sm")
+                    )}>
+                      <Markdown>{msg.content}</Markdown>
+                    </div>
+                  </div>
+                ))}
+                {isLoadingChatReplying && (
+                  <div className="flex justify-start">
+                    <div className={cn(
+                      "max-w-[80%] rounded-2xl p-4 text-sm flex items-center gap-2 shadow-sm",
+                      theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-800 text-slate-200",
+                      "rounded-tl-sm"
+                    )}>
+                      <div className="flex gap-1">
+                        {[0, 1, 2].map(i => (
+                          <motion.div
+                            key={i}
+                            animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
+                            transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
+                            className="w-1.5 h-1.5 bg-indigo-400 rounded-full"
+                          />
+                        ))}
+                      </div>
+                      <span className="text-xs font-medium text-slate-500">NITian is typing...</span>
+                    </div>
+                  </div>
+                )}
+                <div ref={loadingChatEndRef} />
+              </div>
+
+              <div className={cn(
+                "p-4 border-t",
+                theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-950 border-slate-800"
+              )}>
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleLoadingChatSubmit();
+                  }}
+                  className="relative"
+                >
+                  <input
+                    type="text"
+                    value={loadingChatInput}
+                    onChange={(e) => setLoadingChatInput(e.target.value)}
+                    placeholder="Ask a question while you wait..."
+                    className={cn(
+                      "w-full pl-4 pr-12 py-3 rounded-xl border text-sm transition-all focus:ring-2 focus:ring-indigo-500 outline-none",
+                      theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700 text-white"
+                    )}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!loadingChatInput.trim() || isLoadingChatReplying}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-all"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </form>
+              </div>
             </div>
-          </form>
+          </div>
         </div>
 
-        <div className="mt-8 flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-100 rounded-full">
+        <div className="mt-8 flex items-center gap-3 px-5 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full shadow-sm">
           <div className="flex -space-x-2">
-            <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] text-white font-bold">G</div>
-            <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] text-white font-bold">S</div>
+            <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] text-white font-bold border-2 border-white dark:border-slate-800">G</div>
+            <div className="w-7 h-7 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] text-white font-bold border-2 border-white dark:border-slate-800">S</div>
           </div>
-          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Grounded by Google Search</span>
+          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Grounded by Google Search</span>
         </div>
       </div>
     );
@@ -782,7 +1223,7 @@ export default function App() {
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={resetQuiz}>
             <GraduationCap className={cn("w-8 h-8", theme === 'light' ? "text-indigo-600" : "text-indigo-400")} />
-            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Master with NITian</span>
+            <span className={cn("text-xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>RankBoost with NITian</span>
           </div>
           <div className="flex items-center gap-4">
             <span 
@@ -823,6 +1264,60 @@ export default function App() {
                 />
               )}
             </button>
+
+            <div className="relative">
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className={cn(
+                  "p-2 rounded-xl transition-colors relative",
+                  theme === 'light' ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                )}
+              >
+                <Bell className="w-6 h-6" />
+                {notifications.filter(n => !n.read).length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-3 h-3 bg-rose-500 border-2 border-white dark:border-slate-900 rounded-full" />
+                )}
+              </button>
+
+              {showNotifications && (
+                <div className={cn(
+                  "absolute right-0 mt-2 w-80 rounded-2xl border shadow-xl z-50 overflow-hidden",
+                  theme === 'light' ? "bg-white border-slate-200" : "bg-slate-800 border-slate-700"
+                )}>
+                  <div className="p-4 border-b flex items-center justify-between">
+                    <h4 className="font-bold text-sm">Notifications</h4>
+                    <button 
+                      onClick={() => setNotifications(prev => prev.map(n => ({ ...n, read: true })))}
+                      className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider hover:underline"
+                    >
+                      Mark all as read
+                    </button>
+                  </div>
+                  <div className="max-h-96 overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <div className="p-8 text-center text-slate-400 text-xs">
+                        No notifications yet
+                      </div>
+                    ) : (
+                      notifications.map(notif => (
+                        <div 
+                          key={notif.id} 
+                          className={cn(
+                            "p-4 border-b last:border-0 transition-colors",
+                            notif.read ? "opacity-60" : "bg-indigo-50/30"
+                          )}
+                        >
+                          <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">{notif.message}</p>
+                          <span className="text-[10px] text-slate-400 mt-1 block">
+                            {new Date(notif.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {!isSubscribed && (
               <div className="hidden sm:flex items-center gap-2">
@@ -1463,37 +1958,48 @@ export default function App() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                 {SUBJECTS.map((subject, index) => {
                   const customBorders = ['#13c5d6', '#cca81a', '#cc9396', '#e4abeb', '#97a7f5', '#d25059'];
                   return (
                     <motion.button
                       key={subject.id}
-                      whileHover={{ scale: 1.02 }}
+                      whileHover={{ y: -5 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => setSelectedSubject(subject.id)}
                       className={cn(
-                        "flex items-center p-6 rounded-2xl border-2 transition-all text-left group relative",
+                        "flex flex-col items-center p-6 rounded-3xl border-2 transition-all text-center group relative overflow-hidden",
                         selectedSubject === subject.id 
-                          ? (theme === 'light' ? "border-indigo-600 ring-2 ring-indigo-600/20" : "border-indigo-400 ring-2 ring-indigo-400/20")
-                          : (theme === 'light' ? cn(subject.bg, subject.border) : cn(subject.darkBg, subject.darkBorder)),
-                        "hover:shadow-lg hover:shadow-indigo-500/5"
+                          ? (theme === 'light' ? "border-indigo-600 bg-indigo-50/50" : "border-indigo-400 bg-indigo-950/20")
+                          : (theme === 'light' ? "border-slate-100 bg-white" : "border-slate-800 bg-slate-900"),
+                        "hover:shadow-xl hover:shadow-indigo-500/10"
                       )}
-                      style={{ borderColor: customBorders[index], borderWidth: '3px' }}
+                      style={{ 
+                        borderColor: selectedSubject === subject.id ? undefined : customBorders[index], 
+                        borderWidth: '3px' 
+                      }}
                     >
-                      <div className={cn("p-4 rounded-xl mr-4 shadow-sm", theme === 'light' ? "bg-white" : "bg-slate-800")}>
+                      <div className={cn(
+                        "p-4 rounded-2xl mb-4 transition-all duration-300 group-hover:scale-110 group-hover:rotate-3 shadow-sm",
+                        theme === 'light' ? subject.bg : subject.darkBg
+                      )}>
                         <subject.icon className={cn("w-8 h-8", subject.color)} />
                       </div>
-                      <div className="flex-1">
-                        <h3 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>{subject.id}</h3>
-                        <p className={cn("text-sm", theme === 'light' ? "text-slate-500" : "text-slate-400")}>Select to practice</p>
+                      <div className="space-y-1">
+                        <h3 className={cn("text-base font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
+                          {subject.id}
+                        </h3>
+                        <p className={cn("text-[10px] font-bold uppercase tracking-widest opacity-60", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
+                          Practice Now
+                        </p>
                       </div>
-                      {selectedSubject === subject.id ? (
-                        <div className="bg-indigo-600 text-white p-1 rounded-full">
-                          <PlayCircle className="w-5 h-5" />
+                      
+                      {selectedSubject === subject.id && (
+                        <div className="absolute top-3 right-3">
+                          <div className="bg-indigo-600 text-white p-1 rounded-full shadow-lg">
+                            <CheckCircle2 className="w-4 h-4" />
+                          </div>
                         </div>
-                      ) : (
-                        <ChevronRight className="w-6 h-6 text-slate-400 group-hover:text-slate-600 transition-colors" />
                       )}
                     </motion.button>
                   );
@@ -1511,7 +2017,7 @@ export default function App() {
                   <div className="p-2 bg-indigo-100 rounded-lg">
                     <BrainCircuit className="w-6 h-6 text-indigo-600" />
                   </div>
-                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why Master with NITian?</h2>
+                  <h2 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Why RankBoost with NITian?</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   <div className="space-y-2">
@@ -1661,202 +2167,265 @@ export default function App() {
           )}
 
           {view === 'quiz' && questions.length > 0 && (
-            <motion.div
-              key="quiz"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="space-y-6 relative z-50"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <button 
-                  onClick={resetQuiz}
-                  className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-all font-medium"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  Exit Quiz
-                </button>
-                
-                <div className="flex items-center gap-4">
-                  {timeLimit > 0 && (
-                    <div className={cn(
-                      "flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold font-mono",
-                      (timeLimit - timeElapsed) < 60 ? "bg-rose-100 text-rose-600 animate-pulse" : "bg-slate-100 text-slate-600"
-                    )}>
-                      <Timer className="w-3.5 h-3.5" />
-                      {formatTime(Math.max(0, timeLimit - timeElapsed))}
-                    </div>
-                  )}
-                  <div className="text-sm font-medium text-slate-500">
-                    Question {currentIndex + 1} of {questions.length}
-                  </div>
+            <div className="fixed inset-0 z-[100] bg-white flex flex-col overflow-hidden font-sans">
+              {/* Top Header */}
+              <div className="bg-[#337ab7] text-white px-4 py-1.5 flex items-center justify-between shadow-md relative z-[120]">
+                <div className="flex items-center gap-2 md:gap-4">
+                  <button 
+                    onClick={() => setShowMobilePalette(!showMobilePalette)}
+                    className="lg:hidden p-1 hover:bg-white/10 rounded transition-colors"
+                  >
+                    <Layout className="w-5 h-5" />
+                  </button>
+                  <h1 className="text-lg md:text-xl font-black italic tracking-tighter uppercase">NITian AI</h1>
+                </div>
+                <div className="absolute left-1/2 -translate-x-1/2 font-bold uppercase text-[10px] md:text-sm tracking-widest hidden sm:block">
+                  {examType === 'JEE_MAIN_MOCK' ? 'JEE MAIN MOCK' : examType === 'NEET_MOCK' ? 'NEET 2026 MOCK' : (selectedSubject || 'MOCK TEST')}
+                </div>
+                <div className="flex items-center gap-2 bg-black/20 px-2 md:px-3 py-1 rounded border border-white/10">
+                  <Clock className="w-3 h-3 md:w-4 h-4" />
+                  <span className="font-mono font-bold text-sm md:text-lg">
+                    {formatTime(Math.max(0, timeLimit - timeElapsed))}
+                  </span>
                 </div>
               </div>
 
-              {/* Progress Bar */}
-              <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                <motion.div 
-                  className="h-full bg-indigo-600"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
-                />
+              {/* Subject Tabs */}
+              <div className="bg-white border-b flex items-center overflow-x-auto scrollbar-hide">
+                {Array.from(new Set(questions.map(q => q.subject))).map((sub, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSubjectTabClick(sub)}
+                    className={cn(
+                      "px-6 py-3 text-xs font-bold transition-all border-r border-slate-200 whitespace-nowrap uppercase tracking-wider",
+                      activeSubjectTab === sub 
+                        ? "bg-[#337ab7] text-white" 
+                        : "bg-white text-slate-600 hover:bg-slate-50"
+                    )}
+                  >
+                    {sub}
+                  </button>
+                ))}
+                <div className="flex-1 bg-slate-50 h-full border-l" />
               </div>
 
-              <div className={cn(
-                "p-8 rounded-3xl border shadow-sm space-y-8 transition-colors",
-                theme === 'light' ? "bg-white border-slate-200" : "bg-slate-900 border-slate-800"
-              )}>
-                <div className="space-y-4">
-                  <div className={cn("leading-tight", theme === 'light' ? "text-slate-900" : "text-white")}>
-                    <LatexMarkdown content={questions[currentIndex].text} />
+              {/* Main Content Area */}
+              <div className="flex-1 flex overflow-hidden">
+                {/* Left Side: Question Area */}
+                <div className="flex-1 flex flex-col overflow-hidden bg-white">
+                  <div className="p-3 border-b flex items-center justify-between bg-white">
+                    <h2 className="font-bold text-sm md:text-base text-slate-800 shrink-0">Q. {currentIndex + 1}</h2>
+                    <div className="flex items-center gap-2 md:gap-6 overflow-hidden">
+                      <div className="hidden sm:flex items-center gap-2 text-xs font-bold text-slate-500">
+                        <span>View in:</span>
+                        <select className="border rounded px-2 py-1 bg-white outline-none text-[11px]">
+                          <option>English</option>
+                          <option>Hindi</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2 md:gap-3 text-[10px] md:text-[11px] font-bold whitespace-nowrap">
+                        <div className="flex items-center gap-1 text-slate-500">
+                           <div className="w-3 h-3 md:w-4 h-4 rounded-full border border-slate-300 flex items-center justify-center text-[7px] md:text-[8px] font-black">i</div>
+                           <span className="hidden xs:inline">Marks:</span>
+                        </div>
+                        <span className="text-emerald-600">+{examType === 'NEET_MOCK' || examType === 'NEET' ? '4' : '4'}</span>
+                        <span className="text-slate-300">,</span>
+                        <span className="text-rose-600">-{examType === 'NEET_MOCK' || examType === 'NEET' ? '1' : '1'}</span>
+                      </div>
+                    </div>
                   </div>
 
-                  {questions[currentIndex].diagramUrl && (
-                    <div className="flex justify-center py-4">
-                      <img 
-                        src={questions[currentIndex].diagramUrl} 
-                        alt="Question Diagram" 
-                        className="max-w-full h-auto rounded-2xl border border-slate-200 shadow-sm"
-                        referrerPolicy="no-referrer"
-                      />
-                    </div>
-                  )}
-
-                  {questions[currentIndex].type === 'MATCH' && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
-                      <div className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-800 border-slate-700")}>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">List I</h4>
-                        <ul className="space-y-2">
-                          {questions[currentIndex].list1?.map((item, i) => (
-                            <li key={i} className="flex gap-3 text-sm">
-                              <span className="font-bold text-indigo-600">({String.fromCharCode(65 + i)})</span>
-                              <LatexMarkdown content={item} />
-                            </li>
-                          ))}
-                        </ul>
+                  <div className="flex-1 overflow-y-auto p-4 md:p-10">
+                    <div className="max-w-4xl mx-auto space-y-6 md:space-y-8">
+                      <div className="text-base md:text-lg text-slate-900 leading-relaxed font-semibold">
+                        <LatexMarkdown content={questions[currentIndex].text} />
                       </div>
-                      <div className={cn("p-4 rounded-2xl border", theme === 'light' ? "bg-slate-50 border-slate-200" : "bg-slate-800 border-slate-700")}>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">List II</h4>
-                        <ul className="space-y-2">
-                          {questions[currentIndex].list2?.map((item, i) => (
-                            <li key={i} className="flex gap-3 text-sm">
-                              <span className="font-bold text-indigo-600">({['I', 'II', 'III', 'IV', 'V'][i]})</span>
-                              <LatexMarkdown content={item} />
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  )}
-                </div>
 
-                <div className="grid grid-cols-1 gap-3">
-                  {questions[currentIndex].type === 'NUMERICAL' ? (
-                    <div className="space-y-4">
-                      <p className={cn("text-sm font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
-                        Enter your numerical answer below:
-                      </p>
-                      <input 
-                        type="text"
-                        value={userAnswers[currentIndex] || ''}
-                        onChange={(e) => handleAnswer(e.target.value)}
-                        placeholder="Type your answer here..."
-                        className={cn(
-                          "w-full p-5 rounded-2xl border-2 text-xl font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all",
-                          theme === 'light' ? "bg-white border-slate-100" : "bg-slate-800 border-slate-700 text-white"
-                        )}
-                      />
-                    </div>
-                  ) : (
-                    <>
-                      {(!questions[currentIndex].options || questions[currentIndex].options.length === 0) ? (
-                        <div className="space-y-4">
-                          <p className={cn("text-sm font-medium", theme === 'light' ? "text-slate-500" : "text-slate-400")}>
-                            {questions[currentIndex].type === 'MATCH'
-                              ? "Enter the correct matching sequence (e.g., A-I, B-II, C-III, D-IV):"
-                              : "Enter your answer below:"}
-                          </p>
-                          <input 
-                            type="text"
-                            value={userAnswers[currentIndex] || ''}
-                            onChange={(e) => handleAnswer(e.target.value)}
-                            placeholder="Type your answer here..."
-                            className={cn(
-                              "w-full p-5 rounded-2xl border-2 text-xl font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all",
-                              theme === 'light' ? "bg-white border-slate-100" : "bg-slate-800 border-slate-700 text-white"
-                            )}
+                      {questions[currentIndex].diagramUrl && (
+                        <div className="flex justify-center py-4">
+                          <img 
+                            src={questions[currentIndex].diagramUrl} 
+                            alt="Question Diagram" 
+                            className="max-w-full h-auto rounded-xl border shadow-sm"
+                            referrerPolicy="no-referrer"
                           />
                         </div>
-                      ) : (
-                        questions[currentIndex].options?.map((option, idx) => (
+                      )}
+
+                      <div className="grid grid-cols-1 gap-6 pt-4">
+                        {questions[currentIndex].options?.map((option, idx) => (
                           <button
                             key={idx}
                             onClick={() => handleAnswer(idx)}
-                            className={cn(
-                              "p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between group",
-                              userAnswers[currentIndex] === idx
-                                ? (theme === 'light' ? "border-indigo-600 bg-indigo-50" : "border-indigo-500 bg-indigo-950/30")
-                                : (theme === 'light' ? "border-slate-100 hover:border-slate-200 hover:bg-slate-50" : "border-slate-800 hover:border-slate-700 hover:bg-slate-800/50")
-                            )}
+                            className="flex items-center gap-4 group text-left"
                           >
-                            <div className="flex items-center gap-4">
-                              <span className={cn(
-                                "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0",
-                                userAnswers[currentIndex] === idx
-                                  ? "bg-indigo-600 text-white"
-                                  : (theme === 'light' ? "bg-slate-100 text-slate-500 group-hover:bg-slate-200" : "bg-slate-800 text-slate-400 group-hover:bg-slate-700")
-                              )}>
-                                {String.fromCharCode(65 + idx)}
-                              </span>
-                              <div className={cn(
-                                "font-bold text-lg",
-                                userAnswers[currentIndex] === idx 
-                                  ? (theme === 'light' ? "text-indigo-900" : "text-indigo-100") 
-                                  : (theme === 'light' ? "text-slate-800" : "text-slate-200")
-                              )}>
-                                <LatexMarkdown content={option} />
-                              </div>
+                            <div className={cn(
+                              "w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all",
+                              userAnswers[currentIndex] === idx
+                                ? "border-[#337ab7]"
+                                : "border-slate-300 group-hover:border-slate-400"
+                            )}>
+                              {userAnswers[currentIndex] === idx && <div className="w-2.5 h-2.5 bg-[#337ab7] rounded-full" />}
                             </div>
-                            {userAnswers[currentIndex] === idx && (
-                              <CheckCircle2 className="w-5 h-5 text-indigo-600 shrink-0" />
-                            )}
+                            <div className={cn(
+                               "text-slate-700 font-medium transition-colors",
+                               userAnswers[currentIndex] === idx ? "text-[#337ab7]" : "group-hover:text-slate-900"
+                            )}>
+                              <LatexMarkdown content={option} />
+                            </div>
                           </button>
-                        ))
-                      )}
-                    </>
-                  )}
-                </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
 
-                <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-                  <button
-                    onClick={prevQuestion}
-                    disabled={currentIndex === 0}
-                    className="px-6 py-2 rounded-xl font-semibold text-slate-600 disabled:opacity-30 hover:bg-slate-50 transition-colors"
-                  >
-                    Previous
-                  </button>
-                  
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={skipQuestion}
-                      className={cn(
-                        "px-6 py-2 rounded-xl font-semibold transition-colors",
-                        theme === 'light' ? "text-slate-500 hover:bg-slate-100" : "text-slate-400 hover:bg-slate-800"
-                      )}
-                    >
-                      Skip
-                    </button>
+                  {/* Bottom Footer */}
+                  <div className="p-2 md:p-3 border-t bg-white flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 md:gap-3">
+                      <button
+                        onClick={markForReviewAndNext}
+                        className="flex-1 sm:flex-none px-3 md:px-5 py-2 border border-slate-300 rounded text-[10px] md:text-xs font-bold text-slate-700 hover:bg-slate-50 transition-all shadow-sm whitespace-nowrap"
+                      >
+                        <span className="sm:hidden">Review</span>
+                        <span className="hidden sm:inline">Mark for Review & Next</span>
+                      </button>
+                      <button
+                        onClick={clearResponse}
+                        className="flex-1 sm:flex-none px-3 md:px-5 py-2 border border-slate-300 rounded text-[10px] md:text-xs font-bold text-slate-700 hover:bg-slate-50 transition-all shadow-sm whitespace-nowrap"
+                      >
+                        Clear
+                      </button>
+                    </div>
                     <button
                       onClick={nextQuestion}
-                      disabled={userAnswers[currentIndex] === null}
-                      className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:shadow-none"
+                      className="w-full sm:w-auto px-6 md:px-10 py-2.5 bg-[#337ab7] text-white rounded text-[11px] md:text-xs font-bold hover:bg-[#286090] transition-all shadow-md uppercase tracking-wider"
                     >
-                      {currentIndex === questions.length - 1 ? 'Finish Quiz' : 'Next Question'}
+                      {currentIndex === questions.length - 1 ? 'Save & Finish' : 'Save & Next'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Mobile Palette Overlay */}
+                <AnimatePresence>
+                  {showMobilePalette && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => setShowMobilePalette(false)}
+                      className="fixed inset-0 z-[105] bg-black/50 lg:hidden"
+                    />
+                  )}
+                </AnimatePresence>
+
+                {/* Right Sidebar */}
+                <div className={cn(
+                  "fixed inset-y-0 right-0 z-[110] w-72 md:w-80 bg-white border-l flex flex-col overflow-hidden transition-transform duration-300 lg:static lg:translate-x-0",
+                  showMobilePalette ? "translate-x-0" : "translate-x-full"
+                )}>
+                  {/* Mobile Close Button */}
+                  <div className="lg:hidden p-4 border-b flex items-center justify-between bg-slate-50">
+                    <span className="font-bold text-slate-700">Question Palette</span>
+                    <button onClick={() => setShowMobilePalette(false)} className="p-1 hover:bg-slate-200 rounded">
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                  {/* User Profile */}
+                  <div className="p-4 bg-white border-b flex items-center gap-4">
+                    <div className="w-14 h-14 rounded bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200">
+                      <Users className="w-10 h-10" />
+                    </div>
+                    <div className="flex-1">
+                       <div className="text-[10px] font-bold text-slate-400 uppercase">Time Left:</div>
+                       <div className="text-xl font-mono font-bold text-slate-800 leading-tight">
+                         {formatTime(Math.max(0, timeLimit - timeElapsed))}
+                       </div>
+                       <div className="text-xs font-bold text-slate-700 mt-1">
+                         Aspirant Name
+                       </div>
+                    </div>
+                  </div>
+
+                  {/* Status Summary */}
+                  <div className="p-4 grid grid-cols-2 gap-y-3 gap-x-2 border-b bg-white">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-[#5cb85c] rounded flex items-center justify-center text-white text-[10px] font-bold">
+                        {userAnswers.filter((a, i) => a !== null && !markedForReview[i]).length}
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500">Answered</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-[#d9534f] rounded flex items-center justify-center text-white text-[10px] font-bold">
+                        {visitedQuestions.filter((v, i) => v && userAnswers[i] === null && !markedForReview[i]).length}
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500">Not Answered</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-white border border-slate-300 rounded flex items-center justify-center text-slate-600 text-[10px] font-bold">
+                        {questions.length - visitedQuestions.filter(v => v).length}
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500">Not Visited</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-[#8e44ad] rounded-full flex items-center justify-center text-white text-[10px] font-bold">
+                        {markedForReview.filter((m, i) => m && userAnswers[i] === null).length}
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500">Marked for Review</span>
+                    </div>
+                    <div className="flex items-center gap-2 col-span-2">
+                      <div className="w-6 h-6 bg-[#8e44ad] rounded-full flex items-center justify-center text-white text-[10px] font-bold relative">
+                        {markedForReview.filter((m, i) => m && userAnswers[i] !== null).length}
+                        <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-[#5cb85c] rounded-full border border-white" />
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500">Answered & Marked for Review (will be considered for evaluation)</span>
+                    </div>
+                  </div>
+
+                  {/* Question Palette */}
+                  <div className="bg-[#337ab7] text-white px-4 py-2 text-[11px] font-bold uppercase tracking-wider">
+                    {activeSubjectTab}
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 bg-slate-50/30">
+                    <div className="text-[11px] font-bold text-slate-800 mb-4">Choose a Question</div>
+                    <div className="grid grid-cols-5 gap-2">
+                      {questions.map((_, idx) => {
+                        const status = getQuestionStatus(idx);
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => goToQuestion(idx)}
+                            className={cn(
+                              "w-10 h-10 rounded flex items-center justify-center text-xs font-bold transition-all border relative",
+                              currentIndex === idx ? "ring-2 ring-[#337ab7] ring-offset-1" : "",
+                              status === 'answered' ? "bg-[#5cb85c] text-white border-[#4cae4c]" :
+                              status === 'not-answered' ? "bg-[#d9534f] text-white border-[#d43f3a]" :
+                              status === 'marked' ? "bg-[#8e44ad] text-white border-[#7d3c98] rounded-full" :
+                              status === 'answered-marked' ? "bg-[#8e44ad] text-white border-[#7d3c98] rounded-full" :
+                              "bg-white text-slate-600 border-slate-300"
+                            )}
+                          >
+                            {idx + 1}
+                            {status === 'answered-marked' && (
+                              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-[#5cb85c] rounded-full border border-white" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Submit Button */}
+                  <div className="p-3 border-t bg-white">
+                    <button
+                      onClick={() => setView('results')}
+                      className="w-full py-2.5 bg-[#5cb85c] text-white rounded font-bold text-sm hover:bg-[#4cae4c] transition-all shadow-md uppercase tracking-wider"
+                    >
+                      Submit Test
                     </button>
                   </div>
                 </div>
               </div>
-            </motion.div>
+            </div>
           )}
 
           {view === 'report' && (
@@ -2065,8 +2634,24 @@ export default function App() {
                       <h2 className={cn("text-2xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>Performance Analysis</h2>
                       <p className="text-slate-500 text-sm">Know your strengths in 30 seconds</p>
                     </div>
-                    <div className="p-3 bg-indigo-50 rounded-2xl">
-                      <TrendingUp className="w-6 h-6 text-indigo-600" />
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={handleShare}
+                        disabled={isSharing}
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-200",
+                          theme === 'light' 
+                            ? "bg-indigo-600 text-white hover:bg-indigo-700" 
+                            : "bg-indigo-500 text-white hover:bg-indigo-600",
+                          isSharing && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        <Share2 className="w-4 h-4" />
+                        {isSharing ? "Generating..." : "Share Link"}
+                      </button>
+                      <div className="p-3 bg-indigo-50 rounded-2xl">
+                        <TrendingUp className="w-6 h-6 text-indigo-600" />
+                      </div>
                     </div>
                   </div>
 
@@ -2240,6 +2825,12 @@ export default function App() {
                 </div>
                 <div className="space-y-2">
                   <h2 className={cn("text-4xl font-bold tracking-tight", theme === 'light' ? "text-slate-900" : "text-white")}>Quiz Results</h2>
+                  {sharedResult && (
+                    <div className="flex items-center justify-center gap-2 text-indigo-600 font-bold">
+                      <Users className="w-5 h-5" />
+                      <span>Shared by {sharedResult.userName}</span>
+                    </div>
+                  )}
                   <p className={cn("text-lg", theme === 'light' ? "text-slate-600" : "text-slate-400")}>
                     Detailed performance analysis of your {selectedSubject} {examType} session.
                   </p>
@@ -2300,6 +2891,18 @@ export default function App() {
                     Performance Report
                   </button>
                   <button
+                    onClick={handleShare}
+                    disabled={isSharing}
+                    className={cn(
+                      "px-8 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-indigo-200",
+                      theme === 'light' ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-indigo-500 text-white hover:bg-indigo-600",
+                      isSharing && "opacity-50 cursor-not-allowed"
+                    )}
+                  >
+                    <Share2 className="w-5 h-5" />
+                    {isSharing ? "Generating..." : "Share Results"}
+                  </button>
+                  <button
                     onClick={downloadDpp}
                     disabled={isDownloading}
                     className={cn(
@@ -2316,7 +2919,9 @@ export default function App() {
                   </button>
                   <button
                     onClick={() => {
-                      if (lastQuizParams) {
+                      if (sharedResult) {
+                        resetQuiz();
+                      } else if (lastQuizParams) {
                         startQuiz(
                           lastQuizParams.subject, 
                           lastQuizParams.examType, 
@@ -2332,8 +2937,17 @@ export default function App() {
                     }}
                     className="px-8 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                   >
-                    <RefreshCw className="w-5 h-5" />
-                    Try Again
+                    {sharedResult ? (
+                      <>
+                        <Sparkles className="w-5 h-5 text-indigo-600" />
+                        Create Your Own Quiz
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-5 h-5" />
+                        Try Again
+                      </>
+                    )}
                   </button>
                   <button
                     onClick={resetQuiz}

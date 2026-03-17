@@ -1,4 +1,4 @@
-import { GoogleGenAI, Modality, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, Modality, ThinkingLevel, Type } from "@google/genai";
 import { Question, QUIZ_SCHEMA, Language, ExamType, DoubtResponse, QuizMode } from "../types";
 import { jsonrepair } from "jsonrepair";
 
@@ -9,6 +9,38 @@ const getApiKey = () => {
 };
 
 const ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+/**
+ * Robustly extract JSON from a string that might contain preamble or postamble
+ */
+function extractJson(text: string): string {
+  // Remove markdown code blocks if present
+  let cleaned = text.replace(/```json\n?|```/g, '').trim();
+  
+  // Find the first [ or {
+  const firstBracket = cleaned.indexOf('[');
+  const firstBrace = cleaned.indexOf('{');
+  
+  let start = -1;
+  if (firstBracket !== -1 && (firstBrace === -1 || (firstBracket < firstBrace && firstBracket !== -1))) {
+    start = firstBracket;
+  } else if (firstBrace !== -1) {
+    start = firstBrace;
+  }
+  
+  if (start === -1) return cleaned;
+  
+  // Find the last ] or }
+  const lastBracket = cleaned.lastIndexOf(']');
+  const lastBrace = cleaned.lastIndexOf('}');
+  const end = Math.max(lastBracket, lastBrace);
+  
+  if (end !== -1 && end > start) {
+    return cleaned.substring(start, end + 1);
+  }
+  
+  return cleaned.substring(start);
+}
 
 /**
  * Helper to retry API calls on transient errors
@@ -194,7 +226,7 @@ async function generateDiagram(prompt: string): Promise<string | undefined> {
   return undefined;
 }
 
-const BATCH_SIZE = 10; // Reduced batch size for better reliability and to avoid truncation
+const BATCH_SIZE = 3; // Further reduced batch size for maximum reliability and to avoid truncation
 
 async function generateBatch(
   subject: string, 
@@ -329,7 +361,8 @@ async function generateBatch(
         
         6. DIAGRAM PROMPT: ONLY provide a 'diagramPrompt' if the original source question explicitly includes a diagram or figure. CRITICAL: You MUST use Google Search to verify the accuracy of any diagram, graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it. Do NOT invent diagrams.
         7. EXPLANATION DIAGRAM: You MAY provide an 'explanationDiagramPrompt' if a visual aid would help. CRITICAL: You MUST use Google Search to verify the accuracy of any graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it.
-        8. FORMAT: Return a valid JSON array. Never truncate.`,
+        8. FORMAT: Return a valid JSON array. Never truncate.
+        9. JSON VALIDITY: Ensure all strings are properly escaped. Do not include any text outside the JSON array.`,
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
         tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
@@ -372,18 +405,20 @@ async function generateBatch(
       throw new Error("Empty response from NITian. Please try again.");
     }
     
+    const jsonToParse = extractJson(text);
+    
     try {
-      let repairedJson = text;
-      try {
-        repairedJson = jsonrepair(text);
-      } catch (e) {
-        console.warn("jsonrepair failed, attempting to parse raw text", e);
-      }
-
+      const repairedJson = jsonrepair(jsonToParse);
       let rawQuestions = JSON.parse(repairedJson);
       
       if (rawQuestions && typeof rawQuestions === 'object' && !Array.isArray(rawQuestions)) {
-        rawQuestions = [rawQuestions];
+        if (rawQuestions.questions && Array.isArray(rawQuestions.questions)) {
+          rawQuestions = rawQuestions.questions;
+        } else if (rawQuestions.items && Array.isArray(rawQuestions.items)) {
+          rawQuestions = rawQuestions.items;
+        } else {
+          rawQuestions = [rawQuestions];
+        }
       }
 
       if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
@@ -398,6 +433,62 @@ async function generateBatch(
       }));
     } catch (parseError: any) {
       console.error("Failed to parse NITian response as JSON:", parseError);
+      console.log("Raw text sample (first 500 chars):", text.substring(0, 500));
+      console.log("Raw text sample (last 500 chars):", text.substring(Math.max(0, text.length - 500)));
+      
+      // Attempt recovery for various parsing errors (truncation, malformed strings, etc.)
+      try {
+        // Try to force close the JSON structure if it looks truncated
+        let fixedText = jsonToParse;
+        
+        // If it's a "Colon expected" error, it might be a missing colon after a key
+        // jsonrepair is usually good at this, but let's try to help it
+        
+        if (!fixedText.endsWith(']') && !fixedText.endsWith('}')) {
+          // Try multiple closing patterns
+          const patterns = ['"} ]', '"} } ]', '"} }', ' ]', ' }'];
+          for (const pattern of patterns) {
+            try {
+              const repaired = jsonrepair(fixedText + pattern);
+              const parsed = JSON.parse(repaired);
+              if (parsed) {
+                console.log(`Successfully recovered using pattern: ${pattern}`);
+                let recoveredQuestions = parsed;
+                if (recoveredQuestions.questions) recoveredQuestions = recoveredQuestions.questions;
+                if (Array.isArray(recoveredQuestions) && recoveredQuestions.length > 0) {
+                  return recoveredQuestions.map((q: any) => ({ ...q, subject, language, examType }));
+                }
+              }
+            } catch (e) { /* continue */ }
+          }
+        }
+        
+        const repaired = jsonrepair(fixedText);
+        const parsed = JSON.parse(repaired);
+        let recoveredQuestions = parsed;
+        
+        if (recoveredQuestions && typeof recoveredQuestions === 'object' && !Array.isArray(recoveredQuestions)) {
+          if (recoveredQuestions.questions && Array.isArray(recoveredQuestions.questions)) {
+            recoveredQuestions = recoveredQuestions.questions;
+          } else if (recoveredQuestions.items && Array.isArray(recoveredQuestions.items)) {
+            recoveredQuestions = recoveredQuestions.items;
+          } else {
+            recoveredQuestions = [recoveredQuestions];
+          }
+        }
+
+        if (Array.isArray(recoveredQuestions) && recoveredQuestions.length > 0) {
+          console.log("Successfully recovered from malformed/truncated JSON");
+          return recoveredQuestions.map((q: any) => ({
+            ...q,
+            subject,
+            language,
+            examType
+          }));
+        }
+      } catch (recoveryError) {
+        console.warn("Recovery attempt failed:", recoveryError);
+      }
       
       if (retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
@@ -524,12 +615,12 @@ export async function solveDoubt(
       config: {
         responseMimeType: "application/json",
         responseSchema: {
-          type: "OBJECT",
+          type: Type.OBJECT,
           properties: {
-            explanation: { type: "STRING" },
-            diagramPrompt: { type: "STRING" },
-            subject: { type: "STRING" },
-            topic: { type: "STRING" }
+            explanation: { type: Type.STRING },
+            diagramPrompt: { type: Type.STRING },
+            subject: { type: Type.STRING },
+            topic: { type: Type.STRING }
           },
           required: ["explanation", "subject", "topic"]
         },
@@ -552,17 +643,15 @@ export async function solveDoubt(
       throw new Error("Empty response from NITian.");
     }
 
+    const jsonToParse = extractJson(text);
+
     let result;
     try {
-      let repairedJson = text;
-      try {
-        repairedJson = jsonrepair(text);
-      } catch (e) {
-        console.warn("jsonrepair failed in solveDoubt", e);
-      }
+      const repairedJson = jsonrepair(jsonToParse);
       result = JSON.parse(repairedJson);
     } catch (e) {
       console.error("Failed to parse doubt response:", e);
+      console.log("Raw doubt text (first 500 chars):", text.substring(0, 500) + "...");
       throw new Error("Failed to parse response from NITian.");
     }
     

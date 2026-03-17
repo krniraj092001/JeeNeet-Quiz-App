@@ -13,12 +13,49 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
       },
       "required": ["uid", "isSubscribed"]
+    },
+    "QuizResult": {
+      "title": "QuizResult",
+      "description": "Shared quiz results",
+      "type": "object",
+      "properties": {
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "examType": { "type": "string" },
+        "subject": { "type": "string" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "correctAnswers": { "type": "number" },
+        "wrongAnswers": { "type": "number" },
+        "unanswered": { "type": "number" },
+        "timeElapsed": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" },
+              "userAnswer": { "type": "string" },
+              "correctAnswer": { "type": "string" },
+              "isCorrect": { "type": "boolean" },
+              "explanation": { "type": "string" },
+              "options": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      },
+      "required": ["userName", "userEmail", "examType", "subject", "score", "totalQuestions", "correctAnswers", "wrongAnswers", "unanswered", "timeElapsed", "timestamp", "questions"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles and subscription data"
+    },
+    "/results/{resultId}": {
+      "schema": "QuizResult",
+      "description": "Shared quiz results"
     }
   }
 }

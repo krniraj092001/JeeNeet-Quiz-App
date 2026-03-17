@@ -37,40 +37,54 @@ export const DPPView: React.FC<DPPViewProps> = ({ questions, subject, onBack, th
     element.style.left = '-9999px';
     
     try {
-      // Give it a moment to render any LaTeX
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Give it a moment to render any LaTeX and fonts
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       const canvas = await html2canvas(element, {
-        scale: 3, // Higher scale for better quality
+        scale: 4, // Higher scale for superior quality
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
         windowWidth: 1000,
+        allowTaint: false,
+        imageTimeout: 0,
         onclone: (clonedDoc) => {
           const clonedElement = clonedDoc.getElementById('dpp-template');
           if (clonedElement) {
             clonedElement.style.display = 'block';
+            clonedElement.style.visibility = 'visible';
           }
         }
       });
       
-      const imgData = canvas.toDataURL('image/png'); // PNG for better text clarity
-      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgData = canvas.toDataURL('image/png', 1.0);
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
       
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = pdfWidth / imgWidth;
+      const canvasHeightInMm = imgHeight * ratio;
+      
+      let heightLeft = canvasHeightInMm;
       let position = 0;
 
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-      heightLeft -= pageHeight;
+      // Add first page
+      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, canvasHeightInMm, undefined, 'SLOW');
+      heightLeft -= pdfHeight;
 
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
+      // Add subsequent pages if content exceeds one page
+      while (heightLeft > 0) {
+        position = heightLeft - canvasHeightInMm;
         pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-        heightLeft -= pageHeight;
+        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, canvasHeightInMm, undefined, 'SLOW');
+        heightLeft -= pdfHeight;
       }
 
       pdf.save(`DPP_${subject.replace(/\s+/g, '_')}_${new Date().getTime()}.pdf`);

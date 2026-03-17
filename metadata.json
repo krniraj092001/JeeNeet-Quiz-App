@@ -1,5 +1,5 @@
 {
-  "name": "Master with NITian",
+  "name": "RankBoost with NITian",
   "description": "A comprehensive quiz platform for JEE and NEET aspirants, featuring NITian-powered question generation and detailed explanations.",
   "requestFramePermissions": ["camera"]
 }

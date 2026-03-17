@@ -43,6 +43,22 @@ service cloud.firestore {
              data.isSubscribed is bool;
     }
 
+    function isValidQuizResult(data) {
+      return data.keys().hasAll(['userName', 'userEmail', 'examType', 'subject', 'score', 'totalQuestions', 'correctAnswers', 'wrongAnswers', 'unanswered', 'timeElapsed', 'timestamp', 'questions']) &&
+             data.userName is string && data.userName.size() < 100 &&
+             data.userEmail is string && data.userEmail.size() < 100 &&
+             data.examType is string &&
+             data.subject is string &&
+             data.score is number &&
+             data.totalQuestions is number &&
+             data.correctAnswers is number &&
+             data.wrongAnswers is number &&
+             data.unanswered is number &&
+             data.timeElapsed is number &&
+             data.timestamp is number &&
+             data.questions is list && data.questions.size() <= 100;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -63,6 +79,18 @@ service cloud.firestore {
                       isAdmin();
       
       allow delete: if isAdmin();
+    }
+
+    match /results/{resultId} {
+      // Results are publicly readable via the shareable link
+      allow read: if true;
+      
+      // Allow anyone to create a result (including anonymous)
+      // We still validate the data structure strictly
+      allow create: if isValidQuizResult(request.resource.data);
+      
+      // Results are immutable once created
+      allow update, delete: if isAdmin();
     }
   }
 }
