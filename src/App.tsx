@@ -205,6 +205,8 @@ const EXAM_TYPES: { id: ExamType; label: string; desc: string }[] = [
   { id: 'DPP', label: 'Daily Practice Paper', desc: 'Custom DPP from your notes or syllabus' },
 ];
 
+import InstallBanner from './components/InstallBanner';
+
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [view, setView] = useState<'home' | 'quiz' | 'results' | 'report' | 'ready' | 'dpp' | 'doubt'>('home');
@@ -750,6 +752,9 @@ export default function App() {
       }
       
       setQuestions(qs);
+      if (qs.length > 0) {
+        localStorage.setItem('last_attempted_question', qs[0].text);
+      }
       setUserAnswers(new Array(qs.length).fill(null));
       setQuestionTimes(new Array(qs.length).fill(0));
       setMarkedForReview(new Array(qs.length).fill(false));
@@ -830,6 +835,10 @@ export default function App() {
   };
 
   const goToQuestion = (index: number) => {
+    // Save current question for offline fallback
+    if (questions[index]) {
+      localStorage.setItem('last_attempted_question', questions[index].text);
+    }
     const now = Date.now();
     const timeSpent = Math.floor((now - lastQuestionStartTime) / 1000);
     const newTimes = [...questionTimes];
@@ -1215,6 +1224,7 @@ export default function App() {
       "min-h-screen pb-12 transition-colors duration-300",
       theme === 'light' ? "bg-white text-slate-900" : "bg-slate-900 text-slate-100"
     )}>
+      <InstallBanner />
       {/* Navigation */}
       <nav className={cn(
         "border-b sticky top-0 z-10 transition-colors duration-300",

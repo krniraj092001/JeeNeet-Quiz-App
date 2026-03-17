@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - RankBoost with NITian</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f3f4f6;
+            color: #1f2937;
+            text-align: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        h1 { color: #4f46e5; margin-bottom: 1rem; }
+        p { line-height: 1.5; margin-bottom: 2rem; }
+        button {
+            background-color: #4f46e5;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: #4338ca; }
+        .last-question {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: #f9fafb;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>You're offline</h1>
+        <p>Your quiz progress is saved. Reconnect to sync.</p>
+        <div id="last-question-container" class="last-question" style="display: none;">
+            <strong>Last Question:</strong>
+            <div id="last-question-text"></div>
+        </div>
+        <button onclick="window.location.reload()">Retry Connection</button>
+    </div>
+
+    <script>
+        // Try to show the last question from localStorage
+        try {
+            const lastQuestion = localStorage.getItem('last_attempted_question');
+            if (lastQuestion) {
+                document.getElementById('last-question-container').style.display = 'block';
+                document.getElementById('last-question-text').textContent = lastQuestion;
+            }
+        } catch (e) {
+            console.error('Failed to load last question', e);
+        }
+    </script>
+</body>
+</html>

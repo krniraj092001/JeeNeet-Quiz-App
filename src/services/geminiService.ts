@@ -213,7 +213,7 @@ async function generateDiagram(prompt: string): Promise<string | undefined> {
           aspectRatio: "1:1",
         },
       },
-    }));
+    }), 5, 2000); // More retries and longer base delay for images
 
     for (const part of response.candidates[0].content.parts) {
       if (part.inlineData) {
@@ -533,21 +533,26 @@ export async function generateQuestions(
     try {
       const batchQuestions = await generateBatch(subject, language, examType, currentBatchCount, filesData, difficulty, mode);
       
-      // Generate diagrams for questions and explanations
-      const questionsWithDiagrams = await Promise.all(batchQuestions.map(async (q) => {
+      // Generate diagrams for questions and explanations SEQUENTIALLY to avoid 429 rate limits
+      const questionsWithDiagrams: Question[] = [];
+      for (const q of batchQuestions) {
         let diagramUrl = q.diagramUrl;
         let explanationDiagramUrl = q.explanationDiagramUrl;
 
         if (q.diagramPrompt) {
+          // Add a small delay before image generation to be safe
+          await new Promise(resolve => setTimeout(resolve, 1000));
           diagramUrl = await generateDiagram(q.diagramPrompt);
         }
         
         if (q.explanationDiagramPrompt) {
+          // Add a small delay before image generation to be safe
+          await new Promise(resolve => setTimeout(resolve, 1000));
           explanationDiagramUrl = await generateDiagram(q.explanationDiagramPrompt);
         }
 
-        return { ...q, diagramUrl, explanationDiagramUrl };
-      }));
+        questionsWithDiagrams.push({ ...q, diagramUrl, explanationDiagramUrl });
+      }
       
       allQuestions.push(...questionsWithDiagrams);
     } catch (error) {
