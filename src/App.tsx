@@ -45,7 +45,9 @@ import {
   CreditCard,
   Gift,
   Send,
-  Bell
+  Bell,
+  Maximize,
+  Minimize
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -341,18 +343,6 @@ export default function App() {
       setLoadingStage('syllabus');
       setEstimatedTime(90);
       interval = setInterval(() => {
-        setLoadingProgress(prev => {
-          if (prev >= 98) return prev;
-          const increment = prev < 50 ? 1.5 : (prev < 80 ? 0.8 : 0.3);
-          const next = prev + increment;
-          
-          if (next < 25) setLoadingStage('syllabus');
-          else if (next < 65) setLoadingStage('questions');
-          else if (next < 90) setLoadingStage('explanations');
-          else setLoadingStage('finalizing');
-          
-          return next;
-        });
         setEstimatedTime(prev => (prev > 0 ? prev - 1 : 0));
       }, 1000);
     }
@@ -366,6 +356,27 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [sharedResult, setSharedResult] = useState<QuizResult | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((e) => {
+        console.error(`Error attempting to enable full-screen mode: ${e.message} (${e.name})`);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -686,6 +697,11 @@ export default function App() {
       let currentMode = overrideMode || quizMode;
       let currentFiles = files || (uploadedFiles.length > 0 ? uploadedFiles.map(f => ({ data: f.data, mimeType: f.mimeType })) : undefined);
 
+      // Estimate time: ~10s for syllabus, ~10s per batch of 5 questions, ~5s per diagram
+      // For a standard 15 question quiz, it's roughly 90-120s
+      const estimatedSeconds = 20 + (currentCount * 8); 
+      setEstimatedTime(estimatedSeconds);
+
       setLastQuizParams({
         subject: displaySubject,
         examType: currentExamType,
@@ -695,6 +711,11 @@ export default function App() {
         mode: currentMode,
         files: currentFiles
       });
+
+      const handleProgress = (progress: number, stage: 'syllabus' | 'questions' | 'explanations' | 'finalizing') => {
+        setLoadingProgress(progress);
+        setLoadingStage(stage);
+      };
 
       let qs: Question[] = [];
       
@@ -708,7 +729,16 @@ export default function App() {
           const sub = subjects[i];
           const subCount = countPerSubject + (i < remainder ? 1 : 0);
           if (subCount > 0) {
-            const subjectQs = await generateQuestions(sub, currentLanguage, 'JEE_MAIN_MOCK', subCount, undefined, undefined, currentMode);
+            const subjectQs = await generateQuestions(
+              sub, 
+              currentLanguage, 
+              'JEE_MAIN_MOCK', 
+              subCount, 
+              undefined, 
+              undefined, 
+              currentMode,
+              (p, s) => handleProgress((i / subjects.length) * 100 + (p / subjects.length), s)
+            );
             qs.push(...subjectQs);
             // Increased gap between subjects to respect 15 RPM
             if (i < subjects.length - 1) await new Promise(resolve => setTimeout(resolve, 5000));
@@ -729,7 +759,16 @@ export default function App() {
           const config = subjectConfigs[i];
           const subCount = countPerSubject + (i < remainder ? 1 : 0);
           if (subCount > 0) {
-            const subjectQs = await generateQuestions(config.name, currentLanguage, 'NEET_MOCK', subCount, undefined, undefined, currentMode);
+            const subjectQs = await generateQuestions(
+              config.name, 
+              currentLanguage, 
+              'NEET_MOCK', 
+              subCount, 
+              undefined, 
+              undefined, 
+              currentMode,
+              (p, s) => handleProgress((i / subjectConfigs.length) * 100 + (p / subjectConfigs.length), s)
+            );
             qs.push(...subjectQs);
             // Increased gap between subjects to respect 15 RPM
             if (i < subjectConfigs.length - 1) await new Promise(resolve => setTimeout(resolve, 5000));
@@ -747,7 +786,8 @@ export default function App() {
           currentCount, 
           currentFiles,
           currentDifficulty,
-          currentMode
+          currentMode,
+          handleProgress
         );
       }
       
@@ -970,7 +1010,7 @@ export default function App() {
             <div className="space-y-4">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold uppercase tracking-widest">
                 <div className="w-2 h-2 bg-indigo-600 rounded-full animate-ping" />
-                AI Generation in Progress
+                NITian Generation in Progress
               </div>
               <h2 className="text-3xl font-bold tracking-tight leading-tight">
                 Crafting your <span className="text-indigo-600">Perfect Quiz</span>
@@ -979,7 +1019,7 @@ export default function App() {
                 "text-sm",
                 theme === 'light' ? "text-slate-500" : "text-slate-400"
               )}>
-                Our advanced AI is curating a personalized set of questions based on your selection.
+                Our advanced NITian is curating a personalized set of questions based on your selection.
               </p>
             </div>
 
@@ -1073,7 +1113,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Right Column: AI Assistant Chat */}
+          {/* Right Column: NITian Assistant Chat */}
           <div className="lg:col-span-7">
             <div className={cn(
               "rounded-3xl border shadow-2xl overflow-hidden flex flex-col transition-all h-[600px] relative",
@@ -1100,7 +1140,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-full text-[10px] font-black uppercase tracking-tighter">
-                  AI Chat
+                  NITian Chat
                 </div>
               </div>
               
@@ -1113,7 +1153,7 @@ export default function App() {
                         theme === 'light' ? "bg-slate-100 text-slate-800" : "bg-slate-800 text-slate-200",
                         "rounded-tl-sm"
                       )}>
-                        Hi! I'm your AI study partner. While I'm preparing your quiz, would you like to discuss any specific topic or need some last-minute tips?
+                        Hi! I'm your NITian study partner. While I'm preparing your quiz, would you like to discuss any specific topic or need some last-minute tips?
                       </div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1562,7 +1602,7 @@ export default function App() {
                       </div>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AI Intelligence Mode</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">NITian Intelligence Mode</label>
                       <div className={cn(
                         "flex rounded-xl border overflow-hidden p-1 gap-1",
                         theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
@@ -1600,7 +1640,7 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* AI Doubt Solver Card */}
+                {/* NITian Doubt Solver Card */}
                 <div 
                   className={cn(
                     "p-6 rounded-3xl border shadow-sm space-y-4 transition-colors col-span-1 md:col-span-2 lg:col-span-1 bg-gradient-to-br from-indigo-600 to-violet-700 text-white border-transparent",
@@ -1610,7 +1650,7 @@ export default function App() {
                   <div className="flex items-center justify-between">
                     <h3 className="font-bold flex items-center gap-2 text-white">
                       <Sparkles className="w-5 h-5 text-white" />
-                      AI Doubt Solver
+                      NITian Doubt Solver
                     </h3>
                     <span className="px-2 py-0.5 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest">New</span>
                   </div>
@@ -1868,7 +1908,7 @@ export default function App() {
                       </div>
 
                       <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AI Intelligence Mode</label>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">NITian Intelligence Mode</label>
                         <div className={cn(
                           "flex rounded-xl border overflow-hidden p-1 gap-1",
                           theme === 'light' ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800"
@@ -2187,16 +2227,26 @@ export default function App() {
                   >
                     <Layout className="w-5 h-5" />
                   </button>
-                  <h1 className="text-lg md:text-xl font-black italic tracking-tighter uppercase">NITian AI</h1>
+                  <h1 className="text-lg md:text-xl font-black italic tracking-tighter uppercase">NITian</h1>
                 </div>
                 <div className="absolute left-1/2 -translate-x-1/2 font-bold uppercase text-[10px] md:text-sm tracking-widest hidden sm:block">
                   {examType === 'JEE_MAIN_MOCK' ? 'JEE MAIN MOCK' : examType === 'NEET_MOCK' ? 'NEET 2026 MOCK' : (selectedSubject || 'MOCK TEST')}
                 </div>
-                <div className="flex items-center gap-2 bg-black/20 px-2 md:px-3 py-1 rounded border border-white/10">
-                  <Clock className="w-3 h-3 md:w-4 h-4" />
-                  <span className="font-mono font-bold text-sm md:text-lg">
-                    {formatTime(Math.max(0, timeLimit - timeElapsed))}
-                  </span>
+                <div className="flex items-center gap-2 md:gap-3">
+                  <button 
+                    onClick={toggleFullScreen}
+                    className="p-1.5 hover:bg-white/10 rounded transition-all flex items-center gap-1.5 border border-white/5"
+                    title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                  >
+                    {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                    <span className="text-[10px] font-bold uppercase hidden md:inline">{isFullscreen ? "Exit" : "Full Screen"}</span>
+                  </button>
+                  <div className="flex items-center gap-2 bg-black/20 px-2 md:px-3 py-1 rounded border border-white/10">
+                    <Clock className="w-3 h-3 md:w-4 h-4" />
+                    <span className="font-mono font-bold text-sm md:text-lg">
+                      {formatTime(Math.max(0, timeLimit - timeElapsed))}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -3144,17 +3194,6 @@ export default function App() {
                           <div className={cn("text-lg leading-relaxed font-medium", theme === 'light' ? "text-slate-800" : "text-slate-200")}>
                             <LatexMarkdown content={q.explanation} />
                           </div>
-                          
-                          {q.explanationDiagramUrl && (
-                            <div className="flex justify-center py-6 bg-slate-50 rounded-2xl border border-slate-100 mt-6">
-                              <img 
-                                src={q.explanationDiagramUrl} 
-                                alt="Explanation Diagram" 
-                                className="max-w-full h-auto rounded-xl shadow-sm"
-                                referrerPolicy="no-referrer"
-                              />
-                            </div>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -3235,7 +3274,7 @@ export default function App() {
                     </h2>
                     <p className={cn("text-lg", theme === 'light' ? "text-slate-600" : "text-slate-400")}>
                       {quizCount >= 5 || doubtCount >= 5 || examType === 'JEE_MAIN_MOCK' || examType === 'NEET_MOCK'
-                        ? "You've reached your free limit or selected a premium feature. Unlock unlimited Quizzes, Mock Tests, and AI Doubt Solving."
+                        ? "You've reached your free limit or selected a premium feature. Unlock unlimited Quizzes, Mock Tests, and NITian Doubt Solving."
                         : "Students who analyze their mistakes are 3x more likely to succeed. Unlock your detailed performance report and unlimited doubts now."}
                     </p>
                   </div>
@@ -3268,19 +3307,10 @@ export default function App() {
                       <Zap className="w-5 h-5" />
                       Unlock Now
                     </button>
-                    <div className="flex justify-between items-center px-2">
+                    <div className="flex justify-center items-center px-2">
                       <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">
                         Secure via Razorpay
                       </p>
-                      <button 
-                        onClick={() => {
-                          setIsSubscribed(true);
-                          setShowPaywall(false);
-                        }}
-                        className="text-[10px] text-indigo-600 font-bold uppercase tracking-widest hover:underline"
-                      >
-                        Already Paid? Restore
-                      </button>
                     </div>
                   </div>
                 </div>

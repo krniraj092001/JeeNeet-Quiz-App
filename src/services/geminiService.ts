@@ -8,38 +8,179 @@ const getApiKey = () => {
   return key?.trim() || "";
 };
 
-const ai = new GoogleGenAI({ apiKey: getApiKey() });
+const nitian = new GoogleGenAI({ apiKey: getApiKey() });
 
 /**
  * Robustly extract JSON from a string that might contain preamble or postamble
  */
+/**
+ * Robustly extract JSON from a string that might contain preamble or postamble
+ */
 function extractJson(text: string): string {
-  // Remove markdown code blocks if present
-  let cleaned = text.replace(/```json\n?|```/g, '').trim();
-  
-  // Find the first [ or {
-  const firstBracket = cleaned.indexOf('[');
-  const firstBrace = cleaned.indexOf('{');
-  
-  let start = -1;
-  if (firstBracket !== -1 && (firstBrace === -1 || (firstBracket < firstBrace && firstBracket !== -1))) {
-    start = firstBracket;
-  } else if (firstBrace !== -1) {
-    start = firstBrace;
+  // 1. Try to find content within markdown code blocks
+  const codeBlocks = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/g)];
+  if (codeBlocks.length > 0) {
+    // Return the largest code block that looks like JSON
+    const bestBlock = codeBlocks
+      .map(m => m[1].trim())
+      .filter(b => (b.startsWith('[') || b.startsWith('{')) && (b.endsWith(']') || b.endsWith('}')))
+      .sort((a, b) => b.length - a.length)[0];
+    
+    if (bestBlock) return bestBlock;
+    return codeBlocks[codeBlocks.length - 1][1].trim(); // Fallback to last block
   }
+
+  // 2. Find the last balanced block of brackets [ ]
+  // This is usually the main JSON array if there's thinking text before it.
+  const lastBracketClose = text.lastIndexOf(']');
+  if (lastBracketClose !== -1) {
+    let depth = 0;
+    for (let i = lastBracketClose; i >= 0; i--) {
+      if (text[i] === ']') depth++;
+      else if (text[i] === '[') {
+        depth--;
+        if (depth === 0) {
+          const candidate = text.substring(i, lastBracketClose + 1).trim();
+          // Basic check: does it look like JSON?
+          if (candidate.includes('{') && candidate.includes(':')) {
+            return candidate;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Find the last balanced block of braces { }
+  const lastBraceClose = text.lastIndexOf('}');
+  if (lastBraceClose !== -1) {
+    let depth = 0;
+    for (let i = lastBraceClose; i >= 0; i--) {
+      if (text[i] === '}') depth++;
+      else if (text[i] === '{') {
+        depth--;
+        if (depth === 0) {
+          const candidate = text.substring(i, lastBraceClose + 1).trim();
+          if (candidate.includes(':')) {
+            return candidate;
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Fallback to largest block (original logic but refined)
+  const arrayMatch = text.match(/\[[\s\S]*\]/);
+  if (arrayMatch) return arrayMatch[0].trim();
+
+  const objectMatch = text.match(/\{[\s\S]*\}/);
+  if (objectMatch) return objectMatch[0].trim();
+
+  // 5. If all else fails, try to find the first [ or { and last ] or }
+  const firstBracket = text.indexOf('[');
+  const firstBrace = text.indexOf('{');
+  const start = (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) ? firstBracket : firstBrace;
   
-  if (start === -1) return cleaned;
-  
-  // Find the last ] or }
-  const lastBracket = cleaned.lastIndexOf(']');
-  const lastBrace = cleaned.lastIndexOf('}');
+  const lastBracket = text.lastIndexOf(']');
+  const lastBrace = text.lastIndexOf('}');
   const end = Math.max(lastBracket, lastBrace);
-  
-  if (end !== -1 && end > start) {
-    return cleaned.substring(start, end + 1);
+
+  if (start !== -1 && end !== -1 && end > start) {
+    return text.substring(start, end + 1);
   }
+
+  return text.replace(/```json\n?|```/g, '').trim();
+}
+
+/**
+ * Attempt to parse JSON with multiple recovery strategies
+ */
+function robustParse(text: string): any {
+  let jsonToParse = extractJson(text);
   
-  return cleaned.substring(start);
+  // Strategy 1: Direct parse
+  try {
+    return JSON.parse(jsonToParse);
+  } catch (e) {
+    // Strategy 2: jsonrepair
+    try {
+      const repaired = jsonrepair(jsonToParse);
+      return JSON.parse(repaired);
+    } catch (e2) {
+      // Strategy 3: Pre-process to fix common issues like unescaped newlines in strings
+      // This is a common cause for "Colon expected" or "Unexpected token"
+      try {
+        // Replace unescaped newlines within strings
+        // We look for newlines that are not preceded by a comma, colon, or bracket
+        // and are followed by a key-like pattern or closing bracket
+        const fixedNewlines = jsonToParse.replace(/([^\,\[\{\:\s])\n\s*([\"\}])/g, '$1 $2');
+        return JSON.parse(jsonrepair(fixedNewlines));
+      } catch (eNewlines) {
+        // Continue to other strategies
+      }
+
+      // Strategy 4: Truncated array recovery (more aggressive)
+      if (jsonToParse.trim().startsWith('[')) {
+        // Find the last complete object in the array
+        let lastValidBrace = -1;
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        
+        for (let i = 0; i < jsonToParse.length; i++) {
+          const char = jsonToParse[i];
+          if (char === '"' && !escaped) inString = !inString;
+          if (!inString) {
+            if (char === '{') depth++;
+            if (char === '}') {
+              depth--;
+              if (depth === 0) lastValidBrace = i;
+            }
+          }
+          escaped = char === '\\' && !escaped;
+        }
+        
+        if (lastValidBrace !== -1) {
+          try {
+            const partial = jsonToParse.substring(0, lastValidBrace + 1) + ']';
+            return JSON.parse(jsonrepair(partial));
+          } catch (e3) { /* continue */ }
+        }
+      }
+      
+      // Strategy 5: Truncated object recovery
+      if (jsonToParse.trim().startsWith('{')) {
+        try {
+          // Try to close all open braces/brackets
+          let openBraces = 0;
+          let openBrackets = 0;
+          let inString = false;
+          let escaped = false;
+          
+          for (let i = 0; i < jsonToParse.length; i++) {
+            const char = jsonToParse[i];
+            if (char === '"' && !escaped) inString = !inString;
+            if (!inString) {
+              if (char === '{') openBraces++;
+              if (char === '}') openBraces--;
+              if (char === '[') openBrackets++;
+              if (char === ']') openBrackets--;
+            }
+            escaped = char === '\\' && !escaped;
+          }
+          
+          let suffix = '';
+          if (inString) suffix += '"';
+          while (openBraces > 0) { suffix += '}'; openBraces--; }
+          while (openBrackets > 0) { suffix += ']'; openBrackets--; }
+          
+          return JSON.parse(jsonrepair(jsonToParse + suffix));
+        } catch (e4) { /* continue */ }
+      }
+
+      console.error("All JSON recovery strategies failed.");
+      throw e; 
+    }
+  }
 }
 
 /**
@@ -96,7 +237,7 @@ export async function generateSpeech(text: string): Promise<string | undefined> 
       .trim()
       .substring(0, 1000); // Limit length to 1000 chars for stability
 
-    const response = await withRetry(() => ai.models.generateContent({
+    const response = await withRetry(() => nitian.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: cleanText }] }],
       config: {
@@ -178,7 +319,7 @@ async function generateDiagram(prompt: string): Promise<string | undefined> {
   if (!prompt) return undefined;
   
   try {
-    const response = await withRetry(() => ai.models.generateContent({
+    const response = await withRetry(() => nitian.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [
@@ -360,9 +501,8 @@ async function generateBatch(
           \x60\x60\x60
         
         6. DIAGRAM PROMPT: ONLY provide a 'diagramPrompt' if the original source question explicitly includes a diagram or figure. CRITICAL: You MUST use Google Search to verify the accuracy of any diagram, graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it. Do NOT invent diagrams.
-        7. EXPLANATION DIAGRAM: You MAY provide an 'explanationDiagramPrompt' if a visual aid would help. CRITICAL: You MUST use Google Search to verify the accuracy of any graph, figure, or molecular structure. If it cannot be verified by a Google search, DO NOT include it.
-        8. FORMAT: Return a valid JSON array. Never truncate.
-        9. JSON VALIDITY: Ensure all strings are properly escaped. Do not include any text outside the JSON array.`,
+        7. FORMAT: Return a valid JSON array. Never truncate.
+        8. JSON VALIDITY: Output ONLY the JSON array. Ensure all strings are properly escaped. Use double backslashes for LaTeX inside JSON (e.g., "\\\\frac"). Ensure every key is followed by a colon and every property is correctly quoted. Do not include any text outside the JSON array.`,
         responseMimeType: "application/json",
         responseSchema: QUIZ_SCHEMA,
         tools: [{ googleSearch: {} }], // Grounding for up-to-date syllabus accuracy
@@ -374,7 +514,7 @@ async function generateBatch(
         config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
       }
 
-      return ai.models.generateContent({
+      return nitian.models.generateContent({
         model: model, 
         contents: contents,
         config: config,
@@ -405,11 +545,8 @@ async function generateBatch(
       throw new Error("Empty response from NITian. Please try again.");
     }
     
-    const jsonToParse = extractJson(text);
-    
     try {
-      const repairedJson = jsonrepair(jsonToParse);
-      let rawQuestions = JSON.parse(repairedJson);
+      let rawQuestions = robustParse(text);
       
       if (rawQuestions && typeof rawQuestions === 'object' && !Array.isArray(rawQuestions)) {
         if (rawQuestions.questions && Array.isArray(rawQuestions.questions)) {
@@ -436,67 +573,13 @@ async function generateBatch(
       console.log("Raw text sample (first 500 chars):", text.substring(0, 500));
       console.log("Raw text sample (last 500 chars):", text.substring(Math.max(0, text.length - 500)));
       
-      // Attempt recovery for various parsing errors (truncation, malformed strings, etc.)
-      try {
-        // Try to force close the JSON structure if it looks truncated
-        let fixedText = jsonToParse;
-        
-        // If it's a "Colon expected" error, it might be a missing colon after a key
-        // jsonrepair is usually good at this, but let's try to help it
-        
-        if (!fixedText.endsWith(']') && !fixedText.endsWith('}')) {
-          // Try multiple closing patterns
-          const patterns = ['"} ]', '"} } ]', '"} }', ' ]', ' }'];
-          for (const pattern of patterns) {
-            try {
-              const repaired = jsonrepair(fixedText + pattern);
-              const parsed = JSON.parse(repaired);
-              if (parsed) {
-                console.log(`Successfully recovered using pattern: ${pattern}`);
-                let recoveredQuestions = parsed;
-                if (recoveredQuestions.questions) recoveredQuestions = recoveredQuestions.questions;
-                if (Array.isArray(recoveredQuestions) && recoveredQuestions.length > 0) {
-                  return recoveredQuestions.map((q: any) => ({ ...q, subject, language, examType }));
-                }
-              }
-            } catch (e) { /* continue */ }
-          }
-        }
-        
-        const repaired = jsonrepair(fixedText);
-        const parsed = JSON.parse(repaired);
-        let recoveredQuestions = parsed;
-        
-        if (recoveredQuestions && typeof recoveredQuestions === 'object' && !Array.isArray(recoveredQuestions)) {
-          if (recoveredQuestions.questions && Array.isArray(recoveredQuestions.questions)) {
-            recoveredQuestions = recoveredQuestions.questions;
-          } else if (recoveredQuestions.items && Array.isArray(recoveredQuestions.items)) {
-            recoveredQuestions = recoveredQuestions.items;
-          } else {
-            recoveredQuestions = [recoveredQuestions];
-          }
-        }
-
-        if (Array.isArray(recoveredQuestions) && recoveredQuestions.length > 0) {
-          console.log("Successfully recovered from malformed/truncated JSON");
-          return recoveredQuestions.map((q: any) => ({
-            ...q,
-            subject,
-            language,
-            examType
-          }));
-        }
-      } catch (recoveryError) {
-        console.warn("Recovery attempt failed:", recoveryError);
-      }
-      
       if (retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
         return generateBatch(subject, language, examType, count, filesData, difficulty, mode, retryCount + 1);
       }
       
-      throw new Error("The NITian response was invalid after multiple attempts. Please try again.");
+      throw new Error(`Failed to parse NITian response after multiple attempts. (Error: ${parseError.message})`);
     }
   } catch (error: any) {
     console.error("Error generating batch:", error);
@@ -511,10 +594,13 @@ export async function generateQuestions(
   count: number = 15, 
   filesData?: { data: string, mimeType: string }[],
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD',
-  mode: QuizMode = 'standard'
+  mode: QuizMode = 'standard',
+  onProgress?: (progress: number, stage: 'syllabus' | 'questions' | 'explanations' | 'finalizing') => void
 ): Promise<Question[]> {
   const allQuestions: Question[] = [];
   const numBatches = Math.ceil(count / BATCH_SIZE);
+
+  onProgress?.(10, 'syllabus');
 
   for (let i = 0; i < numBatches; i++) {
     const currentBatchCount = Math.min(BATCH_SIZE, count - (i * BATCH_SIZE));
@@ -531,27 +617,25 @@ export async function generateQuestions(
     }
 
     try {
+      onProgress?.(20 + (i / numBatches) * 40, 'questions');
       const batchQuestions = await generateBatch(subject, language, examType, currentBatchCount, filesData, difficulty, mode);
       
       // Generate diagrams for questions and explanations SEQUENTIALLY to avoid 429 rate limits
+      // 15 RPM = 1 request every 4 seconds. We use 4.5s to be safe.
       const questionsWithDiagrams: Question[] = [];
-      for (const q of batchQuestions) {
+      for (let j = 0; j < batchQuestions.length; j++) {
+        const q = batchQuestions[j];
         let diagramUrl = q.diagramUrl;
-        let explanationDiagramUrl = q.explanationDiagramUrl;
+
+        onProgress?.(60 + (i / numBatches) * 20 + (j / batchQuestions.length) * (20 / numBatches), 'explanations');
 
         if (q.diagramPrompt) {
-          // Add a small delay before image generation to be safe
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Wait to respect 15 RPM limit
+          await new Promise(resolve => setTimeout(resolve, 4500));
           diagramUrl = await generateDiagram(q.diagramPrompt);
         }
         
-        if (q.explanationDiagramPrompt) {
-          // Add a small delay before image generation to be safe
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          explanationDiagramUrl = await generateDiagram(q.explanationDiagramPrompt);
-        }
-
-        questionsWithDiagrams.push({ ...q, diagramUrl, explanationDiagramUrl });
+        questionsWithDiagrams.push({ ...q, diagramUrl });
       }
       
       allQuestions.push(...questionsWithDiagrams);
@@ -560,6 +644,8 @@ export async function generateQuestions(
       throw error; // Re-throw to be handled by the UI
     }
   }
+
+  onProgress?.(95, 'finalizing');
 
   return allQuestions.map((q, index) => ({
     ...q,
@@ -600,8 +686,7 @@ export async function solveDoubt(
        \x60\x60\x60answer
        [Final Answer with LaTeX]
        \x60\x60\x60
-  3. If a diagram would help, provide a detailed 'diagramPrompt'. Verify accuracy using Google Search.
-  4. Identify the 'subject' and 'topic' of the question.`;
+  3. Identify the 'subject' and 'topic' of the question.`;
 
   try {
     const contents: any = { parts: [{ text: prompt }] };
@@ -614,7 +699,7 @@ export async function solveDoubt(
       });
     }
 
-    const generateCall = (model: string) => ai.models.generateContent({
+    const generateCall = (model: string) => nitian.models.generateContent({
       model: model,
       contents: contents,
       config: {
@@ -623,7 +708,6 @@ export async function solveDoubt(
           type: Type.OBJECT,
           properties: {
             explanation: { type: Type.STRING },
-            diagramPrompt: { type: Type.STRING },
             subject: { type: Type.STRING },
             topic: { type: Type.STRING }
           },
@@ -666,14 +750,8 @@ export async function solveDoubt(
       uri: chunk.web?.uri
     })).filter(s => s.title && s.uri);
 
-    let diagramUrl = undefined;
-    if (result.diagramPrompt) {
-      diagramUrl = await generateDiagram(result.diagramPrompt);
-    }
-
     return {
       explanation: result.explanation,
-      diagramUrl,
       subject: result.subject,
       topic: result.topic,
       sources: sources?.length ? sources : undefined
@@ -691,7 +769,7 @@ export async function chatDuringLoading(
     throw new Error("API_KEY_MISSING");
   }
 
-  const prompt = `You are NITian Assistant, a friendly, helpful AI assistant for JEE and NEET aspirants. 
+  const prompt = `You are NITian Assistant, a friendly, helpful NITian assistant for JEE and NEET aspirants. 
   The user is currently waiting for a quiz to be generated. 
   
   CRITICAL INSTRUCTIONS:
@@ -709,7 +787,7 @@ export async function chatDuringLoading(
   try {
     const historyString = messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
     
-    const response = await withRetry(() => ai.models.generateContent({
+    const response = await withRetry(() => nitian.models.generateContent({
       model: "gemini-3.1-flash-lite-preview",
       contents: `${prompt}\n\nConversation History:\n${historyString}\n\nAssistant:`,
     }));

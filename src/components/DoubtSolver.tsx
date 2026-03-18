@@ -121,38 +121,25 @@ export default function DoubtSolver({
 
   const startCamera = async () => {
     try {
+      setCameraError(null);
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Camera API not supported in this browser.");
       }
 
-      // Check if any video devices exist first
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasVideoDevice = devices.some(device => device.kind === 'videoinput');
-      
-      if (!hasVideoDevice) {
-        throw new Error("No camera device found on this system.");
-      }
-      
       let mediaStream: MediaStream;
       try {
-        // Try environment camera first with ideal constraint
+        // Try environment camera first with ideal constraint (back camera on mobile)
         mediaStream = await navigator.mediaDevices.getUserMedia({ 
           video: { facingMode: { ideal: 'environment' } },
           audio: false 
         });
       } catch (e) {
         console.warn("Environment camera failed, trying simple video constraint...");
-        try {
-          // Try any video device
-          mediaStream = await navigator.mediaDevices.getUserMedia({ 
-            video: true,
-            audio: false 
-          });
-        } catch (e2) {
-          console.warn("Simple video constraint failed, trying minimal constraints...");
-          // Last resort: minimal constraints
-          mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        }
+        // Try any video device
+        mediaStream = await navigator.mediaDevices.getUserMedia({ 
+          video: true,
+          audio: false 
+        });
       }
       
       setStream(mediaStream);
@@ -183,9 +170,11 @@ export default function DoubtSolver({
       const errorMessage = err.message || '';
 
       if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
-        msg = "Camera permission denied. Please enable camera access in your browser settings to take photos.";
+        msg = "Camera permission denied. Please allow camera access in your browser settings and refresh the page.";
       } else if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError' || errorMessage.toLowerCase().includes('device not found') || errorMessage.toLowerCase().includes('notfounderror')) {
-        msg = "No camera found or the requested camera device is not available. Please ensure your camera is connected and not in use by another app.";
+        msg = "No camera found on this device. Opening file picker instead...";
+        // Fallback to native camera input (file picker with capture attribute)
+        setTimeout(() => cameraInputRef.current?.click(), 1000);
       } else if (errorName === 'NotReadableError' || errorName === 'TrackStartError') {
         msg = "Camera is already in use by another application or a hardware error occurred.";
       } else if (errorMessage.includes('Camera API not supported')) {
@@ -193,8 +182,6 @@ export default function DoubtSolver({
       }
       
       setCameraError(msg);
-      // Fallback to native camera input (file picker with capture attribute)
-      cameraInputRef.current?.click();
       
       // Clear error after 5 seconds
       setTimeout(() => setCameraError(null), 5000);
@@ -323,7 +310,7 @@ export default function DoubtSolver({
         </button>
         <div className="flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-indigo-500" />
-          <h1 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>AI Doubt Solver</h1>
+          <h1 className={cn("text-xl font-bold", theme === 'light' ? "text-slate-900" : "text-white")}>NITian Doubt Solver</h1>
         </div>
       </div>
 

@@ -15,8 +15,6 @@ export interface Question {
   explanation: string;
   diagramPrompt?: string;
   diagramUrl?: string;
-  explanationDiagramPrompt?: string;
-  explanationDiagramUrl?: string;
   subject: string;
   topic: string;
   grade: 'Class 11' | 'Class 12';
@@ -98,10 +96,6 @@ export const QUIZ_SCHEMA = {
       diagramPrompt: {
         type: Type.STRING,
         description: "ONLY if the original source question (e.g., from MS Chauhan or PYQ) has a diagram, provide a detailed description to recreate it. Otherwise, leave empty."
-      },
-      explanationDiagramPrompt: {
-        type: Type.STRING,
-        description: "If a diagram would help clarify the solution (e.g., reaction mechanism, free body diagram), provide a description here. This is optional but encouraged for clarity."
       },
       topic: { type: Type.STRING, description: "Specific topic within the subject" },
       grade: { type: Type.STRING, description: "Academic grade: 'Class 11' or 'Class 12'" },
